@@ -26,6 +26,7 @@ def fix_and_write(fig,
                   height_factor = 1,
                   xaxes={},
                   yaxes={},
+                  anotations={},
                   output_type = IMAGE):
     width = config.get('width', 1920) * width_factor
     height = config.get('height', 1280) * height_factor
@@ -50,7 +51,9 @@ def fix_and_write(fig,
     t =  dict(tickfont_size=font_size, titlefont_size=font_size)
     t.update(yaxes)
     fig.update_yaxes(**t)
-    fig.update_annotations(font_size=font_size)
+    t = dict(font_size=font_size)
+    t.update(anotations)
+    #fig.update_annotations(**anotations)
 
     if output_dir is None:
         output_dir = config['output_dir']
