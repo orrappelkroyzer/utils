@@ -70,6 +70,7 @@ def fix_and_write(fig,
 
     logger.info("Writing image to {}".format(fn))
     fn.unlink(missing_ok=True)
+    fn.parents[0].mkdir(parents=True, exist_ok=True)
     func(fn, **kw_args)
 
 tab10 = [[31, 119, 180],
