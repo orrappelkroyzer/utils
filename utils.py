@@ -31,6 +31,7 @@ def load_config(config_path: Union[Path, str] = Path("config.json"), output_dir_
 def prompt_config(config_def):
     config = {}
     for field, default_response in config_def.items():
-        t = '\t'*(len(default_response)/4)
+        t = '\t'*int((len(default_response)/4))
         config[field] = easygui_qt.get_string(message=f"Please enter {field}{t}", 
                                              default_response=default_response)
+    return config
