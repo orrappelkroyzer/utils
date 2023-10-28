@@ -15,7 +15,7 @@ import plotly.colors
 import distinctipy
 IMAGE = 'image'
 HTML = 'html'
-font_size = 24
+font_size = 16
 
 def fix_and_write(fig,
                   filename,
@@ -40,7 +40,7 @@ def fix_and_write(fig,
         layout_params['legend'] = dict(
             title_font_family='Courier New',
             font=dict(
-                size=22
+                size=20
             )
         )
     fig.update_layout(**layout_params)
