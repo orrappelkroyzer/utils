@@ -40,7 +40,7 @@ def fix_and_write(fig,
         layout_params['legend'] = dict(
             title_font_family='Courier New',
             font=dict(
-                size=22
+                size=28
             )
         )
     fig.update_layout(**layout_params)
