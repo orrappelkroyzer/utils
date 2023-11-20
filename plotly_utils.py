@@ -15,7 +15,7 @@ import plotly.colors
 import distinctipy
 IMAGE = 'image'
 HTML = 'html'
-font_size = 16
+font_size = config.get('font_size', 28)
 
 def fix_and_write(fig,
                   filename,
