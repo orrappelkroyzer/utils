@@ -53,7 +53,7 @@ def fix_and_write(fig,
     fig.update_yaxes(**t)
     t = dict(font_size=font_size)
     t.update(anotations)
-    #fig.update_annotations(**anotations)
+    fig.update_annotations(**anotations)
 
     if output_dir is None:
         output_dir = config['output_dir']
