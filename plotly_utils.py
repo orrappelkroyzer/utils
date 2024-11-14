@@ -40,7 +40,7 @@ def fix_and_write(fig,
         layout_params['legend'] = dict(
             title_font_family='Courier New',
             font=dict(
-                size=28
+                size=40
             )
         )
     fig.update_layout(**layout_params)
@@ -53,7 +53,18 @@ def fix_and_write(fig,
     fig.update_yaxes(**t)
     t = dict(font_size=font_size)
     t.update(anotations)
-    #fig.update_annotations(**anotations)
+    fig.update_annotations(**anotations)
+
+    fig.update_layout(
+        coloraxis_colorbar=dict(
+            title=dict(font=dict(size=font_size)),  # Enlarge the colorbar title font
+            tickfont=dict(size=font_size)           # Enlarge the colorbar tick labels font
+        ),
+        legend=dict(
+           font=dict(size=font_size)  # Set the font size for the legend
+        )
+    )
+
 
     if output_dir is None:
         output_dir = config['output_dir']
