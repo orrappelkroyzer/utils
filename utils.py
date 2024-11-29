@@ -16,7 +16,7 @@ def get_logger(s):
 DATE = 'date'
 DATETIME = 'datetime'
 def load_config(config_path: Union[Path, str] = Path("config.json"), output_dir_suffix: str = None, add_date: str = DATE) -> dict:
-    with open(config_path) as f:
+    with open(config_path, encoding='utf-8') as f:
         config = json.load(f)
     output_dir_today = Path(config['output_dir'])
     if output_dir_suffix is not None:

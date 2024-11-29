@@ -40,7 +40,7 @@ def fix_and_write(fig,
         layout_params['legend'] = dict(
             title_font_family='Courier New',
             font=dict(
-                size=28
+                size=40
             )
         )
     fig.update_layout(**layout_params)
@@ -53,7 +53,18 @@ def fix_and_write(fig,
     fig.update_yaxes(**t)
     t = dict(font_size=font_size)
     t.update(anotations)
-    #fig.update_annotations(**anotations)
+    fig.update_annotations(**anotations)
+
+    fig.update_layout(
+        coloraxis_colorbar=dict(
+            title=dict(font=dict(size=font_size)),  # Enlarge the colorbar title font
+            tickfont=dict(size=font_size)           # Enlarge the colorbar tick labels font
+        ),
+        legend=dict(
+           font=dict(size=font_size)  # Set the font size for the legend
+        )
+    )
+
 
     if output_dir is None:
         output_dir = config['output_dir']
@@ -117,21 +128,21 @@ tab20 = [[31, 119, 180],
  [158, 218, 229],
  [158, 218, 229]]
 
-def get_colors(N, cmap_name=None, with_faded=False):
-    if cmap_name is not None:
-        cmap = cm.get_cmap(plt.get_cmap(cmap_name))
-        colors = cmap(np.linspace(0, 1, N))
-        colors = [[int(x) for x in y] for y in (colors[:, :3]*255).tolist()]
-    elif N <= 9:
-        colors = [[int(y) for y in x[4:-1].split(",")] for x in plotly.colors.qualitative.Set1]
-        # [[int(x[1:][i:i+2], 16) for i in [0,2,4]] for x in plotly.colors.qualitative.Set1]
-    elif N<= 24:
-        colors = [[int(x[1:][i:i+2], 16) for i in [0,2,4]] for x in plotly.colors.qualitative.Light24]
-    elif N < 100:
-        colors = distinctipy.get_colors(N)
-    else:
-        raise AssertionError("get_colors got too large N")
-    if with_faded:
-        return ['rgb({})'.format(",".join([str(x) for x in y])) for y in colors], \
-            ['rgba({},0.2)'.format(",".join([str(x) for x in y])) for y in colors]
-    return ['rgb({})'.format(",".join([str(x) for x in y])) for y in colors]
+#def get_colors(N, cmap_name=None, with_faded=False):
+    # if cmap_name is not None:
+    #     cmap = cm.get_cmap(plt.get_cmap(cmap_name))
+    #     colors = cmap(np.linspace(0, 1, N))
+    #     colors = [[int(x) for x in y] for y in (colors[:, :3]*255).tolist()]
+    # elif N <= 9:
+    #     colors = [[int(y) for y in x[4:-1].split(",")] for x in plotly.colors.qualitative.Set1]
+    #     # [[int(x[1:][i:i+2], 16) for i in [0,2,4]] for x in plotly.colors.qualitative.Set1]
+    # elif N<= 24:
+    #     colors = [[int(x[1:][i:i+2], 16) for i in [0,2,4]] for x in plotly.colors.qualitative.Light24]
+    # elif N < 100:
+    #     colors = distinctipy.get_colors(N)
+    # else:
+    #     raise AssertionError("get_colors got too large N")
+    # if with_faded:
+    #     return ['rgb({})'.format(",".join([str(x) for x in y])) for y in colors], \
+    #         ['rgba({},0.2)'.format(",".join([str(x) for x in y])) for y in colors]
+    # return ['rgb({})'.format(",".join([str(x) for x in y])) for y in colors]
