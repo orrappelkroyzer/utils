@@ -9,6 +9,7 @@ config = load_config(Path(local_python_path) / "config.json")
 from matplotlib import cm
 from matplotlib import pyplot as plt
 import numpy as np
+from plotly.subplots import make_subplots
 
 import plotly.express as px
 import plotly.colors
@@ -72,6 +73,32 @@ def fix_and_write(fig,
     fn.unlink(missing_ok=True)
     fn.parents[0].mkdir(parents=True, exist_ok=True)
     func(fn, **kw_args)
+
+def combine_figures(figs_list):
+
+
+    # Extract titles from fig1 and fig2
+    titles = [fig.layout.title.text if fig.layout.title.text else f"Figure {i+1}" for i, fig in enumerate(figs_list)]
+
+    # Create a subplot figure with the extracted titles
+    combined_fig = make_subplots(
+        cols=1, rows=len(figs_list),  # 1 row and 2 columns
+        subplot_titles=(titles)  # Use extracted titles
+    )
+
+    # Add traces from fig1 to the first subplot
+    for i, fig in enumerate(figs_list):
+        for trace in fig.data:
+            combined_fig.add_trace(trace, col=1, row=i+1)
+    
+    # Update the layout
+    combined_fig.update_layout(
+        showlegend=False  # Set to True if you want a combined legend
+    )
+
+    # Show the combined figure
+    return combined_fig
+
 
 tab10 = [[31, 119, 180],
  [31, 119, 180],
