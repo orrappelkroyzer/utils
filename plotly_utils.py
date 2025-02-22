@@ -18,6 +18,15 @@ IMAGE = 'image'
 HTML = 'html'
 font_size = config.get('font_size', 28)
 
+def write_csv(df, filename, output_dir=None):
+    if output_dir is None:
+        output_dir = config['output_dir']
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    fn = output_dir / "{}.csv".format(filename)
+    logger.info("Writing csv to {}".format(fn))
+    df.to_csv(fn, index=False)
+
 def fix_and_write(fig,
                   filename,
                   traces = None,
@@ -46,10 +55,10 @@ def fix_and_write(fig,
         )
     fig.update_layout(**layout_params)
 
-    t = dict(tickfont_size=font_size, titlefont_size=font_size)
+    t = dict(tickfont={'size': font_size}, title_font={'size': font_size})
     t.update(xaxes)
     fig.update_xaxes(**t)
-    t =  dict(tickfont_size=font_size, titlefont_size=font_size)
+    t = dict(tickfont={'size': font_size}, title_font={'size': font_size})
     t.update(yaxes)
     fig.update_yaxes(**t)
     t = dict(font_size=font_size)
