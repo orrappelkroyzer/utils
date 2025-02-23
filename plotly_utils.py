@@ -10,10 +10,11 @@ from matplotlib import cm
 from matplotlib import pyplot as plt
 import numpy as np
 from plotly.subplots import make_subplots
+import pandas as pd
+
+from openpyxl import load_workbook
 
 import plotly.express as px
-import plotly.colors
-import distinctipy
 IMAGE = 'image'
 HTML = 'html'
 font_size = config.get('font_size', 28)
@@ -26,6 +27,24 @@ def write_csv(df, filename, output_dir=None):
     fn = output_dir / "{}.csv".format(filename)
     logger.info("Writing csv to {}".format(fn))
     df.to_csv(fn, index=False)
+
+def write_excel(df, filename, output_dir=None, sheet_name='Sheet1'):
+    if output_dir is None:
+        output_dir = config['output_dir']
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    fn = output_dir / "{}.xlsx".format(filename)
+    logger.info(f"Writing excel to sheet {sheet_name} in file {fn}")
+    try:
+        # Try to load the existing Excel file
+        with pd.ExcelWriter(fn, engine='openpyxl', mode='a') as writer:
+            df.to_excel(writer, sheet_name=sheet_name)
+    except FileNotFoundError:
+        # If the file does not exist, create a new one
+        with pd.ExcelWriter(fn, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name=sheet_name)
+    
+
 
 def fix_and_write(fig,
                   filename,
