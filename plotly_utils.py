@@ -19,16 +19,16 @@ IMAGE = 'image'
 HTML = 'html'
 font_size = config.get('font_size', 28)
 
-def write_csv(df, filename, output_dir=None):
+def write_csv(df, filename, output_dir=None, index=False):
     if output_dir is None:
         output_dir = config['output_dir']
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     fn = output_dir / "{}.csv".format(filename)
     logger.info("Writing csv to {}".format(fn))
-    df.to_csv(fn, index=False)
+    df.to_csv(fn, index=index)
 
-def write_excel(df, filename, output_dir=None, sheet_name='Sheet1'):
+def write_excel(df, filename, output_dir=None, sheet_name='Sheet1', index=False):
     if output_dir is None:
         output_dir = config['output_dir']
     output_dir = Path(output_dir)
@@ -38,11 +38,11 @@ def write_excel(df, filename, output_dir=None, sheet_name='Sheet1'):
     try:
         # Try to load the existing Excel file
         with pd.ExcelWriter(fn, engine='openpyxl', mode='a') as writer:
-            df.to_excel(writer, sheet_name=sheet_name)
+            df.to_excel(writer, sheet_name=sheet_name, index=index)
     except FileNotFoundError:
         # If the file does not exist, create a new one
         with pd.ExcelWriter(fn, engine='openpyxl') as writer:
-            df.to_excel(writer, sheet_name=sheet_name)
+            df.to_excel(writer, sheet_name=sheet_name, index=index)
     
 
 
