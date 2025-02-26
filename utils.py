@@ -3,7 +3,7 @@ import logging
 import json
 from pathlib import Path
 from typing import Union
-import easygui_qt
+
 
 LOG_LEVEL = logging.INFO
 def get_logger(s):
@@ -33,6 +33,7 @@ def load_config(config_path: Union[Path, str] = Path("config.json"), output_dir_
 
 
 def prompt_config(config_def):
+    import easygui_qt
     config = {}
     for field, default_response in config_def.items():
         t = '\t'*int((len(default_response)/4))
