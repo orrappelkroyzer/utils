@@ -100,7 +100,7 @@ def fix_and_write(fig,
     if output_type == IMAGE:
         fn = output_dir / "{}.png".format(filename)
         func = fig.write_image
-        kw_args = dict(height=height, width=width)#dict(scale = width_in_mm * 17780.0)
+        kw_args = dict(height=height, width=width,  engine="orca")#dict(scale = width_in_mm * 17780.0)
     elif output_type == HTML:
         fn = output_dir / "{}.html".format(filename)
         func = fig.write_html
