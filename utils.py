@@ -27,8 +27,9 @@ def load_config(config_path: Union[Path, str] = Path("config.json"), output_dir_
         output_dir_today /= datetime.now().isoformat("_", 'minutes').replace(":", "-")
     config['output_dir'] = output_dir_today
     output_dir_today.mkdir(parents=True, exist_ok=True)
-    if 'db_dir' in config:
-        config['db_dir'] = Path(config['db_dir'])
+    for x in config.keys():
+        if x.endswith('_dir'):
+            config[x] = Path(config[x])
     return config
 
 
