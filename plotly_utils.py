@@ -53,7 +53,8 @@ def fix_and_write(fig,
                   xaxes={},
                   yaxes={},
                   anotations={},
-                  output_type = IMAGE):
+                  output_type = IMAGE,
+                  font_size = font_size):
     width = config.get('width', 1920) * width_factor
     height = config.get('height', 1280) * height_factor
     if traces is not None:
@@ -62,13 +63,13 @@ def fix_and_write(fig,
          layout_params['title']={'x':0.5,
                                   'font_size' : font_size,
                                  'xanchor': 'center'}
-    if 'legend' not in layout_params:
-        layout_params['legend'] = dict(
-            title_font_family='Courier New',
-            font=dict(
-                size=40
-            )
-        )
+    # if 'legend' not in layout_params:
+    #     layout_params['legend'] = dict(
+    #         # title_font_family='Courier New',
+    #         font=dict(
+    #             size=40
+    #         )
+    #     )
     fig.update_layout(**layout_params)
 
     t = dict(tickfont={'size': font_size}, title_font={'size': font_size})
@@ -97,7 +98,7 @@ def fix_and_write(fig,
     if output_type == IMAGE:
         fn = output_dir / "{}.png".format(filename)
         func = fig.write_image
-        kw_args = dict(height=height, width=width)#dict(scale = width_in_mm * 17780.0)
+        kw_args = dict(height=height, width=width,  engine="orca")#dict(scale = width_in_mm * 17780.0)
     elif output_type == HTML:
         fn = output_dir / "{}.html".format(filename)
         func = fig.write_html
