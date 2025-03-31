@@ -28,20 +28,17 @@ def write_csv(df, filename, output_dir=None, index=False):
     logger.info("Writing csv to {}".format(fn))
     df.to_csv(fn, index=index)
 
-def write_excel(df, filename, output_dir=None, sheet_name='Sheet1', index=False):
+def write_excel(df, filename, output_dir=None, sheet_name='Sheet1', index=False, override=False):
     if output_dir is None:
         output_dir = config['output_dir']
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     fn = output_dir / "{}.xlsx".format(filename)
     logger.info(f"Writing excel to sheet {sheet_name} in file {fn}")
-    try:
-        # Try to load the existing Excel file
+    if not fn.exists() or override:
+        df.to_excel(fn, sheet_name=sheet_name, index=index)
+    else:
         with pd.ExcelWriter(fn, engine='openpyxl', mode='a') as writer:
-            df.to_excel(writer, sheet_name=sheet_name, index=index)
-    except FileNotFoundError:
-        # If the file does not exist, create a new one
-        with pd.ExcelWriter(fn, engine='openpyxl') as writer:
             df.to_excel(writer, sheet_name=sheet_name, index=index)
     
 
