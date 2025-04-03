@@ -28,7 +28,7 @@ def write_csv(df, filename, output_dir=None, index=False):
     logger.info("Writing csv to {}".format(fn))
     df.to_csv(fn, index=index)
 
-def write_excel(df, filename, output_dir=None, sheet_name='Sheet1', index=False, override=False):
+def write_excel(df, filename, output_dir=None, sheet_name='Sheet1', index=False, override=True):
     if output_dir is None:
         output_dir = config['output_dir']
     output_dir = Path(output_dir)
