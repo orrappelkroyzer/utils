@@ -28,19 +28,47 @@ def write_csv(df, filename, output_dir=None, index=False):
     logger.info("Writing csv to {}".format(fn))
     df.to_csv(fn, index=index)
 
-def write_excel(df, filename, output_dir=None, sheet_name='Sheet1', index=False, override=True):
+OVERWRITE_FILE = 'overwrite_file'
+OVERWRITE_SHEET = 'overwrite_sheet'
+APPEND_SHEET = 'append_sheet'
+
+def write_excel(df, filename, output_dir=None, sheet_name='Sheet1', index=False, override_mode=OVERWRITE_FILE):
     if output_dir is None:
         output_dir = config['output_dir']
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     fn = output_dir / "{}.xlsx".format(filename)
     logger.info(f"Writing excel to sheet {sheet_name} in file {fn}")
-    if not fn.exists() or override:
+    if not fn.exists() or override_mode == OVERWRITE_FILE:
         df.to_excel(fn, sheet_name=sheet_name, index=index)
-    else:
+        return
+    # File exists and override is False
+    if override_mode == OVERWRITE_SHEET:
+        # Try pandas native sheet replace first
+        try:
+            with pd.ExcelWriter(fn, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:  # type: ignore
+                df.to_excel(writer, sheet_name=sheet_name, index=index)
+            return
+        except TypeError:
+            # Fallback for older pandas: manually delete sheet then append
+            try:
+                wb = load_workbook(fn)
+                if sheet_name in wb.sheetnames:
+                    ws = wb[sheet_name]
+                    wb.remove(ws)
+                    wb.save(fn)
+            except Exception as e:
+                logger.warning(f"Failed to remove existing sheet '{sheet_name}' from {fn}: {e}")
+            # Now append the new sheet
+            with pd.ExcelWriter(fn, engine='openpyxl', mode='a') as writer:
+                df.to_excel(writer, sheet_name=sheet_name, index=index)
+            return
+    elif override_mode == APPEND_SHEET:
         with pd.ExcelWriter(fn, engine='openpyxl', mode='a') as writer:
             df.to_excel(writer, sheet_name=sheet_name, index=index)
-    
+            return
+    else:
+        raise AssertionError(f"received illegal override_mode {override_mode}")
 
 
 def fix_and_write(fig,
