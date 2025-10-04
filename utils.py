@@ -3,6 +3,7 @@ import logging
 import json
 from pathlib import Path
 from typing import Union
+import pandas as pd
 
 
 LOG_LEVEL = logging.INFO
@@ -41,3 +42,41 @@ def prompt_config(config_def):
         config[field] = easygui_qt.get_string(message=f"Please enter {field}{t}", 
                                              default_response=default_response)
     return config
+
+
+def replace_row_with_dataframe(df: pd.DataFrame, row_idx: int, replacement_df: pd.DataFrame, row: pd.Series) -> pd.DataFrame:
+    """
+    Replace a single row in a DataFrame with multiple rows from another DataFrame.
+    
+    Args:
+        df: Original DataFrame
+        row_idx: Index of the row to replace
+        replacement_df: DataFrame containing replacement rows
+        row: Original row data for filling missing columns
+        
+    Returns:
+        DataFrame with the row replaced by the replacement rows
+    """
+    original_columns = df.columns.tolist()
+    
+    # Drop columns not present in the original, and add missing ones filled from the source row
+    replacement_aligned = replacement_df.copy()
+    # If replacement came as Series-stacked columns (some returns use .T), coerce to DataFrame
+    if isinstance(replacement_aligned, pd.Series):
+        replacement_aligned = replacement_aligned.to_frame().T
+
+    for col in list(replacement_aligned.columns):
+        if col not in original_columns:
+            replacement_aligned.drop(columns=[col], inplace=True)
+
+    for col in original_columns:
+        if col not in replacement_aligned.columns:
+            replacement_aligned[col] = row.get(col, None)
+
+    # Reorder columns to match original
+    replacement_aligned = replacement_aligned[original_columns]
+
+    # Splice: rows before, replacement rows, rows after
+    before = df.iloc[:row_idx]
+    after = df.iloc[row_idx+1:]
+    return pd.concat([before, replacement_aligned, after], ignore_index=True)
