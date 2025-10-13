@@ -16,6 +16,11 @@ def get_logger(s):
 
 DATE = 'date'
 DATETIME = 'datetime'
+
+def get_decade_str(year: int) -> str:
+    """Convert a year to its decade string (e.g., 2023 -> '2020')."""
+    return str(year // 10 * 10)
+
 def load_config(config_path: Union[Path, str] = Path("config.json"), output_dir_suffix: str = None, add_date: str = DATE) -> dict:
     with open(config_path, encoding='utf-8') as f:
         config = json.load(f)
