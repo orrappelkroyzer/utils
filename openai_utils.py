@@ -67,6 +67,7 @@ def call_openai_api(messages, model=DEFAULT_MODEL, temperature=0.1, system_messa
         "messages": messages,
     }
     
+    
     # Only add temperature if the model supports it
     if SUPPORTED_MODELS[model]["supports_temperature"]:
         api_params["temperature"] = temperature
@@ -75,6 +76,10 @@ def call_openai_api(messages, model=DEFAULT_MODEL, temperature=0.1, system_messa
     if system_message:
         messages = [{"role": "system", "content": system_message}] + messages
     
+    t = [len(m['content'].split()) for m in messages]
+    if len(t) == 1:
+        t = t[0]
+    logger.info(f"prompt size(s): {t} words")
     try:
         logger.info(f"Calling {model} for API request")
         start_time = time.time()
