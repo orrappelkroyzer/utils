@@ -30,9 +30,11 @@ import os
 import json
 import logging
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Union
 import time
 import sys
+import pandas as pd
+import numpy as np
 
 # Add parent directory to path for config access
 local_python_path = str(Path(__file__).parents[1])
@@ -584,4 +586,63 @@ def embed_pdfs_and_create_qa(pdf_directory: Path,
     )
     
     return qa_system
+
+
+def embed_texts_from_series(text_series: pd.Series,
+                            embedding_model_id: str = DEFAULT_EMBEDDING_MODEL,
+                            batch_size: int = 100) -> np.ndarray:
+    """
+    Embed texts from a pandas Series and return embeddings as numpy array.
+    
+    Args:
+        text_series: pandas Series containing text strings to embed
+        embedding_model_id: Embedding model ID to use
+        region_name: AWS region (not used for OpenAI embeddings, kept for API consistency)
+        aws_access_key_id: Optional AWS access key (not used for OpenAI)
+        aws_secret_access_key: Optional AWS secret key (not used for OpenAI)
+        batch_size: Number of texts to embed in each batch (for progress logging)
+        
+    Returns:
+        numpy array of shape (n_texts, embedding_dim) containing embeddings
+        
+    Example:
+        >>> import pandas as pd
+        >>> texts = pd.Series(["Hello world", "How are you?", "Goodbye"])
+        >>> embeddings = embed_texts_from_series(texts)
+        >>> print(embeddings.shape)  # (3, embedding_dim)
+    """
+    if not LANGCHAIN_AVAILABLE:
+        raise ImportError("LangChain is required. Install with: pip install langchain langchain-openai")
+    
+    # Initialize embeddings (using OpenAI)
+    if "OPENAI_API_KEY" not in os.environ and config.get("open_ai_key"):
+        os.environ["OPENAI_API_KEY"] = str(config.get("open_ai_key"))
+    
+    embeddings_model = OpenAIEmbeddings(model=embedding_model_id)
+    
+    # Filter out NaN/None values
+    valid_mask = text_series.notna() & (text_series != '')
+    valid_texts = text_series[valid_mask].tolist()
+    
+    if len(valid_texts) == 0:
+        logger.warning("No valid texts found in series")
+        return np.array([])
+    
+    logger.info(f"Embedding {len(valid_texts)} texts...")
+    
+    # Embed texts in batches for progress tracking
+    all_embeddings = []
+    for i in range(0, len(valid_texts), batch_size):
+        logger.info(f"Embedding batch {i//batch_size} of {len(valid_texts)//batch_size} ({(i + batch_size)/len(valid_texts)*100:.2f}%)...")
+        batch = valid_texts[i:i + batch_size]
+        batch_embeddings = embeddings_model.embed_documents(batch)
+        all_embeddings.extend(batch_embeddings)
+        
+        if (i + batch_size) % (batch_size * 10) == 0 or i + batch_size >= len(valid_texts):
+            logger.info(f"Embedded {min(i + batch_size, len(valid_texts))}/{len(valid_texts)} texts...")
+    
+    embeddings_array = np.array(all_embeddings)
+    logger.info(f"Embeddings completed. Shape: {embeddings_array.shape}")
+    
+    return embeddings_array
 
