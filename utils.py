@@ -11,7 +11,7 @@ def get_logger(s):
                         datefmt="%d/%m/%y %H:%M:%S")
     logger = logging.getLogger(s)
     logger.setLevel(LOG_LEVEL)
-    return logger
+    return logger   
 
 DATE = 'date'
 DATETIME = 'datetime'
