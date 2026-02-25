@@ -137,4 +137,70 @@ def call_openai_with_json_response(messages, model=DEFAULT_MODEL, temperature=0.
         logger.error(f"Failed to parse JSON response: {e}")
         logger.error(f"Raw response: {response_content}")
         return False, None, f"JSON parsing failed: {e}"
-## bracket classification moved to fix_unparsed.py
+def upload_file(file_path, purpose="user_data"):
+    """Upload a file to OpenAI and return the file ID."""
+    client = get_openai_client()
+    file_path = Path(file_path)
+    if not file_path.exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
+    logger.info(f"Uploading {file_path.name} to OpenAI")
+    with open(file_path, "rb") as f:
+        response = client.files.create(file=f, purpose=purpose)
+    logger.info(f"Uploaded file ID: {response.id}")
+    return response.id
+
+
+def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
+    """
+    Call OpenAI API with a file reference (for PDFs, images, etc.).
+
+    Returns:
+        Tuple of (success: bool, response_content: str or None, error: str or None)
+    """
+    client = get_openai_client()
+
+    messages = []
+    if system_message:
+        messages.append({"role": "system", "content": system_message})
+    messages.append({
+        "role": "user",
+        "content": [
+            {"type": "input_file", "file_id": file_id},
+            {"type": "input_text", "text": prompt},
+        ]
+    })
+
+    api_params = {"model": model, "input": messages}
+    if SUPPORTED_MODELS.get(model, {}).get("supports_temperature", True):
+        api_params["temperature"] = temperature
+
+    try:
+        logger.info(f"Calling {model} with file {file_id}")
+        start_time = time.time()
+        response = client.responses.create(**api_params)
+        response_content = response.output_text.strip()
+        elapsed = time.time() - start_time
+        if elapsed > 60:
+            logger.error(f"Response took {int(elapsed // 60)}m {int(elapsed % 60)}s")
+        else:
+            logger.info(f"Response took {int(round(elapsed))}s")
+        return True, response_content, None
+    except Exception as e:
+        logger.error(f"OpenAI API call with file failed: {e}")
+        return False, None, str(e)
+
+
+def call_openai_with_file_json(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
+    """Call OpenAI with a file and parse JSON from the response."""
+    success, content, error = call_openai_with_file(file_id, prompt, model, temperature, system_message)
+    if not success:
+        return False, None, error
+    try:
+        json_start = content.find('[')
+        json_end = content.rfind(']') + 1
+        if json_start != -1 and json_end > json_start:
+            return True, json.loads(content[json_start:json_end]), None
+        return True, json.loads(content), None
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON: {e}\nRaw: {content}")
+        return False, None, f"JSON parsing failed: {e}"

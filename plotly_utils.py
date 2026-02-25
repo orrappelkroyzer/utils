@@ -17,7 +17,7 @@ from openpyxl import load_workbook
 import plotly.express as px
 IMAGE = 'image'
 HTML = 'html'
-font_size = config.get('font_size', 28)
+font_size = config.get('font_size', 36)
 
 def write_csv(df, filename, output_dir=None, index=False):
     if output_dir is None:
@@ -110,15 +110,15 @@ def fix_and_write(fig,
     t.update(anotations)
     fig.update_annotations(**anotations)
 
-    fig.update_layout(
+    extra_layout = dict(
         coloraxis_colorbar=dict(
-            title=dict(font=dict(size=font_size)),  # Enlarge the colorbar title font
-            tickfont=dict(size=font_size)           # Enlarge the colorbar tick labels font
+            title=dict(font=dict(size=font_size)),
+            tickfont=dict(size=font_size)
         ),
-        legend=dict(
-           font=dict(size=font_size)  # Set the font size for the legend
-        )
     )
+    if 'legend' not in layout_params:
+        extra_layout['legend'] = dict(font=dict(size=font_size))
+    fig.update_layout(**extra_layout)
 
 
     if output_dir is None:
