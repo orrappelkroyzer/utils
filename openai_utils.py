@@ -121,17 +121,8 @@ def call_openai_with_json_response(messages, model=DEFAULT_MODEL, temperature=0.
     
     try:
         # Extract JSON from the response (in case there's extra text)
-        json_start = response_content.find('[')
-        json_end = response_content.rfind(']') + 1
-        
-        if json_start != -1 and json_end != -1:
-            json_content = response_content[json_start:json_end]
-            parsed_json = json.loads(json_content)
-            return True, parsed_json, None
-        else:
-            # Try parsing the entire response as JSON
-            parsed_json = json.loads(response_content)
-            return True, parsed_json, None
+        parsed_json = json.loads(response_content)
+        return True, parsed_json, None
             
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse JSON response: {e}")
