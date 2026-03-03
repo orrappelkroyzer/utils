@@ -135,10 +135,36 @@ def upload_file(file_path, purpose="user_data"):
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
     logger.info(f"Uploading {file_path.name} to OpenAI")
-    with open(file_path, "rb") as f:
-        response = client.files.create(file=f, purpose=purpose)
-    logger.info(f"Uploaded file ID: {response.id}")
-    return response.id
+
+    # Read bytes first to avoid Windows file-streaming issues (OSError 22)
+    # observed when httpx iterates file handles from cloud-synced directories.
+    try:
+        file_bytes = file_path.read_bytes()
+    except Exception as e:
+        raise OSError(f"Failed reading file bytes for upload: {file_path} ({e})") from e
+
+    if not file_bytes:
+        raise ValueError(f"Cannot upload empty file: {file_path}")
+
+    max_attempts = 2
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = client.files.create(
+                file=(file_path.name, file_bytes, "application/pdf"),
+                purpose=purpose
+            )
+            logger.info(f"Uploaded file ID: {response.id}")
+            return response.id
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                f"Upload attempt {attempt}/{max_attempts} failed for {file_path}: {e}"
+            )
+            if attempt < max_attempts:
+                time.sleep(2)
+
+    raise RuntimeError(f"Failed uploading file after {max_attempts} attempts: {file_path}") from last_error
 
 
 def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
@@ -161,7 +187,7 @@ def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1,
         ]
     })
 
-    api_params = {"model": model, "input": messages}
+    api_params = {"model": model, "input": messages, "max_output_tokens": 16384}
     if SUPPORTED_MODELS.get(model, {}).get("supports_temperature", True):
         api_params["temperature"] = temperature
 
@@ -175,6 +201,9 @@ def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1,
             logger.error(f"Response took {int(elapsed // 60)}m {int(elapsed % 60)}s")
         else:
             logger.info(f"Response took {int(round(elapsed))}s")
+        if getattr(response, 'status', None) == 'incomplete':
+            reason = getattr(response, 'incomplete_details', None)
+            logger.warning(f"Response was truncated (incomplete). Reason: {reason}")
         return True, response_content, None
     except Exception as e:
         logger.error(f"OpenAI API call with file failed: {e}")
