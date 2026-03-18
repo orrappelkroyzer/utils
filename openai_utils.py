@@ -210,17 +210,28 @@ def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1,
         return False, None, str(e)
 
 
+def _fix_invalid_json_escapes(s):
+    """Replace invalid backslash escapes that GPT OCR output may contain."""
+    import re
+    return re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', s)
+
+
 def call_openai_with_file_json(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
     """Call OpenAI with a file and parse JSON from the response."""
     success, content, error = call_openai_with_file(file_id, prompt, model, temperature, system_message)
     if not success:
         return False, None, error
     try:
-        json_start = content.find('[')
-        json_end = content.rfind(']') + 1
+        json_str = content
+        json_start = json_str.find('[')
+        json_end = json_str.rfind(']') + 1
         if json_start != -1 and json_end > json_start:
-            return True, json.loads(content[json_start:json_end]), None
-        return True, json.loads(content), None
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse JSON: {e}\nRaw: {content}")
-        return False, None, f"JSON parsing failed: {e}"
+            json_str = json_str[json_start:json_end]
+        return True, json.loads(json_str), None
+    except json.JSONDecodeError:
+        try:
+            fixed = _fix_invalid_json_escapes(json_str)
+            return True, json.loads(fixed), None
+        except json.JSONDecodeError as e2:
+            logger.error(f"Failed to parse JSON: {e2}\nRaw: {content}")
+            return False, None, f"JSON parsing failed: {e2}"
