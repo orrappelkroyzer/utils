@@ -24,7 +24,7 @@ Session 2+ (Query multiple times):
     result = qa.query("What is the main topic?")
     print(result["answer"])
 """
-
+ 
 import boto3
 import os
 import json
