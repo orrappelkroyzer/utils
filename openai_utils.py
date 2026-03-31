@@ -137,10 +137,36 @@ def upload_file(file_path, purpose="user_data"):
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
     logger.info(f"Uploading {file_path.name} to OpenAI")
-    with open(file_path, "rb") as f:
-        response = client.files.create(file=f, purpose=purpose)
-    logger.info(f"Uploaded file ID: {response.id}")
-    return response.id
+
+    # Read bytes first to avoid Windows file-streaming issues (OSError 22)
+    # observed when httpx iterates file handles from cloud-synced directories.
+    try:
+        file_bytes = file_path.read_bytes()
+    except Exception as e:
+        raise OSError(f"Failed reading file bytes for upload: {file_path} ({e})") from e
+
+    if not file_bytes:
+        raise ValueError(f"Cannot upload empty file: {file_path}")
+
+    max_attempts = 2
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = client.files.create(
+                file=(file_path.name, file_bytes, "application/pdf"),
+                purpose=purpose
+            )
+            logger.info(f"Uploaded file ID: {response.id}")
+            return response.id
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                f"Upload attempt {attempt}/{max_attempts} failed for {file_path}: {e}"
+            )
+            if attempt < max_attempts:
+                time.sleep(2)
+
+    raise RuntimeError(f"Failed uploading file after {max_attempts} attempts: {file_path}") from last_error
 
 
 def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
@@ -163,7 +189,7 @@ def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1,
         ]
     })
 
-    api_params = {"model": model, "input": messages}
+    api_params = {"model": model, "input": messages, "max_output_tokens": 16384}
     if SUPPORTED_MODELS.get(model, {}).get("supports_temperature", True):
         api_params["temperature"] = temperature
 
@@ -177,10 +203,19 @@ def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1,
             logger.error(f"Response took {int(elapsed // 60)}m {int(elapsed % 60)}s")
         else:
             logger.info(f"Response took {int(round(elapsed))}s")
+        if getattr(response, 'status', None) == 'incomplete':
+            reason = getattr(response, 'incomplete_details', None)
+            logger.warning(f"Response was truncated (incomplete). Reason: {reason}")
         return True, response_content, None
     except Exception as e:
         logger.error(f"OpenAI API call with file failed: {e}")
         return False, None, str(e)
+
+
+def _fix_invalid_json_escapes(s):
+    """Replace invalid backslash escapes that GPT OCR output may contain."""
+    import re
+    return re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', s)
 
 
 def call_openai_with_file_json(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
@@ -189,11 +224,16 @@ def call_openai_with_file_json(file_id, prompt, model=DEFAULT_MODEL, temperature
     if not success:
         return False, None, error
     try:
-        json_start = content.find('[')
-        json_end = content.rfind(']') + 1
+        json_str = content
+        json_start = json_str.find('[')
+        json_end = json_str.rfind(']') + 1
         if json_start != -1 and json_end > json_start:
-            return True, json.loads(content[json_start:json_end]), None
-        return True, json.loads(content), None
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse JSON: {e}\nRaw: {content}")
-        return False, None, f"JSON parsing failed: {e}"
+            json_str = json_str[json_start:json_end]
+        return True, json.loads(json_str), None
+    except json.JSONDecodeError:
+        try:
+            fixed = _fix_invalid_json_escapes(json_str)
+            return True, json.loads(fixed), None
+        except json.JSONDecodeError as e2:
+            logger.error(f"Failed to parse JSON: {e2}\nRaw: {content}")
+            return False, None, f"JSON parsing failed: {e2}"
