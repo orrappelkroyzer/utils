@@ -23,6 +23,7 @@ GPT_4O = "gpt-4o"
 GPT_4O_MINI = "gpt-4o-mini"
 GPT_5 = "gpt-5"
 GPT_5_MINI = "gpt-5-mini"
+GPT_5_4 = "gpt-5.4"
 
 # Default model
 DEFAULT_MODEL = GPT_5_MINI
@@ -33,6 +34,7 @@ SUPPORTED_MODELS = {
     GPT_4O_MINI: {"supports_temperature": True},
     GPT_5: {"supports_temperature": False},
     GPT_5_MINI: {"supports_temperature": False},
+    GPT_5_4: {"supports_temperature": False},
 }
 
 # Global client instance
