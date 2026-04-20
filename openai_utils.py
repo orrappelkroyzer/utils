@@ -235,3 +235,4 @@ def call_openai_with_file_json(file_id, prompt, model=DEFAULT_MODEL, temperature
         except json.JSONDecodeError as e2:
             logger.error(f"Failed to parse JSON: {e2}\nRaw: {content}")
             return False, None, f"JSON parsing failed: {e2}"
+ 

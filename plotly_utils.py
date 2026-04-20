@@ -223,6 +223,138 @@ def fix_and_write(fig,
     # Finally, write to disk
     _write_output(fig, filename, output_dir, output_type, width, height)
 
+import plotly.graph_objects as go
+
+_SWATCH_W = 0.04
+_SWATCH_H = 0.03
+_LABEL_GAP = 0.008
+_ENTRY_GAP = 0.04
+_CHAR_W = 0.011
+
+def make_custom_legend(fig, entries, y=-0.22, font_size=28,
+                       swatch_w=_SWATCH_W, swatch_h=_SWATCH_H,
+                       axis_start=10):
+    """Add patterned swatches and labels to *fig* as a hand-drawn legend.
+
+    Parameters
+    ----------
+    fig : plotly.graph_objects.Figure
+    entries : list of (label, color, pattern_shape) tuples.
+        pattern_shape can be "" or None for a solid swatch.
+    y : float
+        Vertical centre of the legend row in paper coordinates.
+    font_size : int
+    swatch_w, swatch_h : float
+        Width and height of each swatch in paper coordinates.
+    axis_start : int
+        First axis index to use for hidden swatch axes (e.g. 10 → xaxis10).
+        Must not collide with axes already on the figure.
+    """
+    entry_widths = [swatch_w + _LABEL_GAP + len(label) * _CHAR_W
+                    for label, *_ in entries]
+    total_w = sum(entry_widths) + (len(entries) - 1) * _ENTRY_GAP
+    cx = 0.5 - total_w / 2
+
+    annotations = []
+    for i, (entry, ew) in enumerate(zip(entries, entry_widths)):
+        label, color = entry[0], entry[1]
+        pattern = entry[2] if len(entry) > 2 else ""
+
+        ax_idx = axis_start + i
+        x_key = f"xaxis{ax_idx}"
+        y_key = f"yaxis{ax_idx}"
+        xref = f"x{ax_idx}"
+        yref = f"y{ax_idx}"
+
+        fig.update_layout(**{
+            x_key: dict(
+                domain=[cx, cx + swatch_w],
+                visible=False, fixedrange=True,
+            ),
+            y_key: dict(
+                domain=[y, y + swatch_h],
+                visible=False, fixedrange=True,
+                anchor=xref,
+            ),
+        })
+
+        fig.add_trace(go.Bar(
+            x=["s"], y=[1],
+            marker=dict(
+                color=color,
+                pattern_shape=pattern or "",
+                pattern_solidity=0.5,
+                line=dict(color="black", width=1),
+            ),
+            showlegend=False,
+            xaxis=xref,
+            yaxis=yref,
+        ))
+
+        annotations.append(dict(
+            xref="paper", yref="paper",
+            x=cx + swatch_w + _LABEL_GAP,
+            y=y + swatch_h / 2,
+            text=label,
+            showarrow=False,
+            xanchor="left",
+            yanchor="middle",
+            font=dict(size=font_size),
+        ))
+        cx += ew + _ENTRY_GAP
+
+    existing = list(fig.layout.annotations or [])
+    fig.update_layout(annotations=existing + annotations)
+
+
+_LINE_SWATCH_W = 0.06
+
+def make_custom_line_legend(fig, entries, y=0.02, font_size=24):
+    """Add line swatches and labels to *fig* as a hand-drawn legend.
+
+    Parameters
+    ----------
+    fig : plotly.graph_objects.Figure
+    entries : list of (label, color, dash) tuples.
+        dash is a plotly dash string: "solid", "dash", "dot", "dashdot", etc.
+    y : float
+        Vertical centre of the legend row in paper coordinates (must be in [0, 1]).
+    font_size : int
+    """
+    entry_widths = [_LINE_SWATCH_W + _LABEL_GAP + len(label) * _CHAR_W
+                    for label, *_ in entries]
+    total_w = sum(entry_widths) + (len(entries) - 1) * _ENTRY_GAP
+    cx = 0.5 - total_w / 2
+
+    shapes = list(fig.layout.shapes or [])
+    annotations = []
+    for (entry, ew) in zip(entries, entry_widths):
+        label, color = entry[0], entry[1]
+        dash = entry[2] if len(entry) > 2 else "solid"
+
+        shapes.append(dict(
+            type="line",
+            xref="paper", yref="paper",
+            x0=cx, x1=cx + _LINE_SWATCH_W,
+            y0=y, y1=y,
+            line=dict(color=color, width=3, dash=dash),
+        ))
+        annotations.append(dict(
+            xref="paper", yref="paper",
+            x=cx + _LINE_SWATCH_W + _LABEL_GAP,
+            y=y,
+            text=label,
+            showarrow=False,
+            xanchor="left",
+            yanchor="middle",
+            font=dict(size=font_size),
+        ))
+        cx += ew + _ENTRY_GAP
+
+    existing_annots = list(fig.layout.annotations or [])
+    fig.update_layout(shapes=shapes, annotations=existing_annots + annotations)
+
+
 def combine_figures(figs_list):
 
 
