@@ -22,6 +22,7 @@ config = load_config(add_date=False, config_path=Path(local_python_path)/ 'confi
 GPT_4O = "gpt-4o"
 GPT_4O_MINI = "gpt-4o-mini"
 GPT_5 = "gpt-5"
+GPT_5_5 = "gpt-5.5"
 GPT_5_MINI = "gpt-5-mini"
 GPT_5_4 = "gpt-5.4"
 
@@ -33,6 +34,7 @@ SUPPORTED_MODELS = {
     GPT_4O: {"supports_temperature": True},
     GPT_4O_MINI: {"supports_temperature": True},
     GPT_5: {"supports_temperature": False},
+    GPT_5_5: {"supports_temperature": False},
     GPT_5_MINI: {"supports_temperature": False},
     GPT_5_4: {"supports_temperature": False},
 }
@@ -130,6 +132,13 @@ def call_openai_with_json_response(messages, model=DEFAULT_MODEL, temperature=0.
         logger.error(f"Failed to parse JSON response: {e}")
         logger.error(f"Raw response: {response_content}")
         return False, None, f"JSON parsing failed: {e}"
+_MIME_BY_EXT = {
+    ".pdf": "application/pdf",
+    ".txt": "text/plain",
+    ".json": "application/json",
+}
+
+
 def upload_file(file_path, purpose="user_data"):
     """Upload a file to OpenAI and return the file ID."""
     client = get_openai_client()
@@ -148,12 +157,14 @@ def upload_file(file_path, purpose="user_data"):
     if not file_bytes:
         raise ValueError(f"Cannot upload empty file: {file_path}")
 
+    mime = _MIME_BY_EXT.get(file_path.suffix.lower(), "application/octet-stream")
+
     max_attempts = 2
     last_error = None
     for attempt in range(1, max_attempts + 1):
         try:
             response = client.files.create(
-                file=(file_path.name, file_bytes, "application/pdf"),
+                file=(file_path.name, file_bytes, mime),
                 purpose=purpose
             )
             logger.info(f"Uploaded file ID: {response.id}")

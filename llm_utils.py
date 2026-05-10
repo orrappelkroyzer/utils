@@ -68,8 +68,8 @@ def call_with_json_response(messages, provider: str, system_message=None, file_i
             system_message=system_message,
             file_ids=file_ids,
         )
-    else:
-        from utils.openai_utils import call_openai_with_file_json, call_openai_with_json_response, GPT_5_4
+    elif provider == PROVIDER_OPENAI:
+        from utils.openai_utils import call_openai_with_file_json, call_openai_with_json_response, GPT_5_5
         if file_ids:
             prompt = messages[0]["content"] if messages else ""
             if system_message:
@@ -79,7 +79,7 @@ def call_with_json_response(messages, provider: str, system_message=None, file_i
                 success, parsed, error = call_openai_with_file_json(
                     file_id=fid,
                     prompt=prompt,
-                    model=GPT_5_4,
+                    model=GPT_5_5,
                     system_message=None, 
                 )
                 if not success:
@@ -93,6 +93,8 @@ def call_with_json_response(messages, provider: str, system_message=None, file_i
         else:
             return call_openai_with_json_response(
                 messages=messages,
-                model=DEFAULT_MODEL,
+                model=GPT_5_5,
                 system_message=system_message,
             )
+    else:
+        raise ValueError(f"Unsupported provider: {provider}")
