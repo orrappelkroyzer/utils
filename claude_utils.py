@@ -60,7 +60,7 @@ def delete_file(file_id: str):
     logger.info(f"Deleted file {file_id}")
 
 
-def _log_elapsed(model: str, elapsed: float):
+def log_elapsed(model: str, elapsed: float):
     if elapsed > 60:
         logger.info(f"Response from {model} took {int(elapsed // 60)}m {int(round(elapsed % 60))}s")
     else:
@@ -90,7 +90,7 @@ def call_claude_api(messages, model=DEFAULT_MODEL, temperature=0.1,
 
     if use_beta and file_ids:
         # Inject file document blocks into the first user message's content
-        messages = _inject_file_blocks(messages, file_ids)
+        messages = inject_file_blocks(messages, file_ids)
 
     api_params = {
         "model": model,
@@ -118,7 +118,7 @@ def call_claude_api(messages, model=DEFAULT_MODEL, temperature=0.1,
                     collected_text.append(text)
 
             response_content = "".join(collected_text).strip()
-            _log_elapsed(model, time.time() - start_time)
+            log_elapsed(model, time.time() - start_time)
 
             return True, response_content, None
 
@@ -137,7 +137,7 @@ def call_claude_api(messages, model=DEFAULT_MODEL, temperature=0.1,
     return False, None, "Max retries exhausted"
 
 
-def _inject_file_blocks(messages: list[dict], file_ids: list[str]) -> list[dict]:
+def inject_file_blocks(messages: list[dict], file_ids: list[str]) -> list[dict]:
     """
     Prepend document blocks for each file_id into the first user message.
     Converts simple string content into a content-block list if needed.

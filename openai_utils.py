@@ -25,6 +25,7 @@ GPT_5 = "gpt-5"
 GPT_5_5 = "gpt-5.5"
 GPT_5_MINI = "gpt-5-mini"
 GPT_5_4 = "gpt-5.4"
+GPT_5_4_MINI = "gpt-5.4-mini"
 
 # Default model
 DEFAULT_MODEL = GPT_5_MINI
@@ -37,10 +38,27 @@ SUPPORTED_MODELS = {
     GPT_5_5: {"supports_temperature": False},
     GPT_5_MINI: {"supports_temperature": False},
     GPT_5_4: {"supports_temperature": False},
+    GPT_5_4_MINI: {"supports_temperature": False},
 }
 
 # Global client instance
 _client = None
+
+
+def is_insufficient_quota_error(error):
+    """Check whether an API exception indicates quota exhaustion."""
+    msg = str(error).lower()
+    return "insufficient_quota" in msg or "exceeded your current quota" in msg
+
+
+def fallback_models_for(model):
+    """Return model fallback chain in priority order (includes original)."""
+    chains = {
+        GPT_5_5: [GPT_5_5, GPT_5_4, GPT_5_MINI, GPT_5_4_MINI, GPT_4O_MINI],
+        GPT_5_4: [GPT_5_4, GPT_5_MINI, GPT_5_4_MINI, GPT_4O_MINI],
+        GPT_5: [GPT_5, GPT_5_MINI, GPT_5_4_MINI, GPT_4O_MINI],
+    }
+    return chains.get(model, [model])
 
 def get_openai_client():
     """Get or create OpenAI client instance."""
@@ -65,17 +83,6 @@ def call_openai_api(messages, model=DEFAULT_MODEL, temperature=0.1, system_messa
     """
     client = get_openai_client()
     
-    # Prepare the API call parameters
-    api_params = {
-        "model": model,
-        "messages": messages,
-    }
-    
-    
-    # Only add temperature if the model supports it
-    if SUPPORTED_MODELS[model]["supports_temperature"]:
-        api_params["temperature"] = temperature
-    
     # Add system message if provided
     if system_message:
         messages = [{"role": "system", "content": system_message}] + messages
@@ -84,26 +91,47 @@ def call_openai_api(messages, model=DEFAULT_MODEL, temperature=0.1, system_messa
     if len(t) == 1:
         t = t[0]
     logger.info(f"prompt size(s): {t} words")
-    try:
-        logger.info(f"Calling {model} for API request")
-        start_time = time.time()
-        response = client.chat.completions.create(**api_params)
-        
-        # Parse the response
-        response_content = response.choices[0].message.content.strip()
-        end_time = time.time()
-        execution_time = end_time - start_time
-        
-        if execution_time > 60:
-            logger.error(f"Response from {model} took {int(execution_time // 60)} minutes and {int(round(execution_time % 60))} seconds")
-        else:
-            logger.info(f"Response from {model} took {int(round(execution_time))} seconds")
-        
-        return True, response_content, None
-        
-    except Exception as e:
-        logger.error(f"OpenAI API call failed: {e}")
-        return False, None, str(e)
+    fallback_chain = fallback_models_for(model)
+    last_error = None
+
+    for candidate_model in fallback_chain:
+        api_params = {
+            "model": candidate_model,
+            "messages": messages,
+        }
+        if SUPPORTED_MODELS.get(candidate_model, {}).get("supports_temperature", True):
+            api_params["temperature"] = temperature
+
+        try:
+            logger.info(f"Calling {candidate_model} for API request")
+            start_time = time.time()
+            response = client.chat.completions.create(**api_params)
+
+            # Parse the response
+            response_content = response.choices[0].message.content.strip()
+            end_time = time.time()
+            execution_time = end_time - start_time
+
+            if execution_time > 60:
+                logger.error(f"Response from {candidate_model} took {int(execution_time // 60)} minutes and {int(round(execution_time % 60))} seconds")
+            else:
+                logger.info(f"Response from {candidate_model} took {int(round(execution_time))} seconds")
+
+            return True, response_content, None
+        except Exception as e:
+            last_error = e
+            should_fallback = is_insufficient_quota_error(e) and candidate_model != fallback_chain[-1]
+            if should_fallback:
+                next_model = fallback_chain[fallback_chain.index(candidate_model) + 1]
+                logger.warning(
+                    f"Model {candidate_model} failed with insufficient quota; "
+                    f"falling back to {next_model}"
+                )
+                continue
+            logger.error(f"OpenAI API call failed on {candidate_model}: {e}")
+            return False, None, str(e)
+
+    return False, None, str(last_error) if last_error else "OpenAI API call failed"
 
 def call_openai_with_json_response(messages, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
     """
@@ -200,30 +228,45 @@ def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1,
         ]
     })
 
-    api_params = {"model": model, "input": messages, "max_output_tokens": 16384}
-    if SUPPORTED_MODELS.get(model, {}).get("supports_temperature", True):
-        api_params["temperature"] = temperature
+    fallback_chain = fallback_models_for(model)
+    last_error = None
 
-    try:
-        logger.info(f"Calling {model} with file {file_id}")
-        start_time = time.time()
-        response = client.responses.create(**api_params)
-        response_content = response.output_text.strip()
-        elapsed = time.time() - start_time
-        if elapsed > 60:
-            logger.error(f"Response took {int(elapsed // 60)}m {int(elapsed % 60)}s")
-        else:
-            logger.info(f"Response took {int(round(elapsed))}s")
-        if getattr(response, 'status', None) == 'incomplete':
-            reason = getattr(response, 'incomplete_details', None)
-            logger.warning(f"Response was truncated (incomplete). Reason: {reason}")
-        return True, response_content, None
-    except Exception as e:
-        logger.error(f"OpenAI API call with file failed: {e}")
-        return False, None, str(e)
+    for candidate_model in fallback_chain:
+        api_params = {"model": candidate_model, "input": messages, "max_output_tokens": 16384}
+        if SUPPORTED_MODELS.get(candidate_model, {}).get("supports_temperature", True):
+            api_params["temperature"] = temperature
+
+        try:
+            logger.info(f"Calling {candidate_model} with file {file_id}")
+            start_time = time.time()
+            response = client.responses.create(**api_params)
+            response_content = response.output_text.strip()
+            elapsed = time.time() - start_time
+            if elapsed > 60:
+                logger.error(f"Response took {int(elapsed // 60)}m {int(elapsed % 60)}s")
+            else:
+                logger.info(f"Response took {int(round(elapsed))}s")
+            if getattr(response, 'status', None) == 'incomplete':
+                reason = getattr(response, 'incomplete_details', None)
+                logger.warning(f"Response was truncated (incomplete). Reason: {reason}")
+            return True, response_content, None
+        except Exception as e:
+            last_error = e
+            should_fallback = is_insufficient_quota_error(e) and candidate_model != fallback_chain[-1]
+            if should_fallback:
+                next_model = fallback_chain[fallback_chain.index(candidate_model) + 1]
+                logger.warning(
+                    f"Model {candidate_model} failed with insufficient quota; "
+                    f"falling back to {next_model}"
+                )
+                continue
+            logger.error(f"OpenAI API call with file failed on {candidate_model}: {e}")
+            return False, None, str(e)
+
+    return False, None, str(last_error) if last_error else "OpenAI API call with file failed"
 
 
-def _fix_invalid_json_escapes(s):
+def fix_invalid_json_escapes(s):
     """Replace invalid backslash escapes that GPT OCR output may contain."""
     import re
     return re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', s)
@@ -243,7 +286,7 @@ def call_openai_with_file_json(file_id, prompt, model=DEFAULT_MODEL, temperature
         return True, json.loads(json_str), None
     except json.JSONDecodeError:
         try:
-            fixed = _fix_invalid_json_escapes(json_str)
+            fixed = fix_invalid_json_escapes(json_str)
             return True, json.loads(fixed), None
         except json.JSONDecodeError as e2:
             logger.error(f"Failed to parse JSON: {e2}\nRaw: {content}")

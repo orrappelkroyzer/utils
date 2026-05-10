@@ -20,7 +20,7 @@ HTML = 'html'
 DEFAULT_FONT_SIZE = config.get('font_size', 36)
 
 
-def _apply_layout(fig, layout_params, font_size):
+def apply_layout(fig, layout_params, font_size):
     """Apply layout parameters including title, base font size, legend and colorbar."""
     if layout_params is None:
         layout_params = {}
@@ -70,7 +70,7 @@ def _apply_layout(fig, layout_params, font_size):
     return layout_params
 
 
-def _apply_axes(fig, xaxes, yaxes, font_size):
+def apply_axes(fig, xaxes, yaxes, font_size):
     """Apply x/y axis parameters including tick and title fonts."""
     if xaxes is None:
         xaxes = {}
@@ -86,7 +86,7 @@ def _apply_axes(fig, xaxes, yaxes, font_size):
     fig.update_yaxes(**t)
 
 
-def _apply_annotations(fig, anotations, font_size):
+def apply_annotations(fig, anotations, font_size):
     """Apply annotations / subplot titles font settings."""
     if anotations is None:
         anotations = {}
@@ -95,7 +95,7 @@ def _apply_annotations(fig, anotations, font_size):
     fig.update_annotations(**ann_kwargs)
 
 
-def _write_output(fig, filename, output_dir, output_type, width, height):
+def write_output(fig, filename, output_dir, output_type, width, height):
     """Write figure to disk as image or HTML."""
     if output_dir is None:
         output_dir = config['output_dir']
@@ -216,12 +216,12 @@ def fix_and_write(fig,
         fig.update_traces(**traces)
 
     # Layout and text handling
-    layout_params = _apply_layout(fig, layout_params, font_size)
-    _apply_axes(fig, xaxes, yaxes, font_size)
-    _apply_annotations(fig, anotations, font_size)
+    layout_params = apply_layout(fig, layout_params, font_size)
+    apply_axes(fig, xaxes, yaxes, font_size)
+    apply_annotations(fig, anotations, font_size)
 
     # Finally, write to disk
-    _write_output(fig, filename, output_dir, output_type, width, height)
+    write_output(fig, filename, output_dir, output_type, width, height)
 
 import plotly.graph_objects as go
 
