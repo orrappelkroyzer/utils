@@ -6,6 +6,7 @@ Provides centralized OpenAI client management and API call functions.
 import time
 import json
 import logging
+import hashlib
 from openai import OpenAI
 from pathlib import Path
 import sys
@@ -208,6 +209,65 @@ def upload_file(file_path, purpose="user_data"):
     raise RuntimeError(f"Failed uploading file after {max_attempts} attempts: {file_path}") from last_error
 
 
+def hash_file(file_path: Path) -> str:
+    """Return SHA256 for cache keying."""
+    h = hashlib.sha256()
+    with file_path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def default_upload_cache_path() -> Path:
+    return Path(local_python_path) / ".openai_upload_cache.json"
+
+
+def load_upload_cache(cache_path: Path) -> dict:
+    if not cache_path.exists():
+        return {}
+    try:
+        return json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("Upload cache is invalid JSON, recreating: %s", cache_path)
+        return {}
+
+
+def save_upload_cache(cache: dict, cache_path: Path):
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def upload_file_cached(file_path, cache_key=None, force_reload=False, purpose="user_data", cache_path=None):
+    """
+    Upload a file and cache OpenAI file ID by content hash.
+    Returns cached file_id when possible.
+    """
+    file_path = Path(file_path)
+    cache_path = Path(cache_path) if cache_path else default_upload_cache_path()
+    cache = load_upload_cache(cache_path)
+    file_hash = hash_file(file_path)
+    key = cache_key or str(file_path.resolve())
+    cache_entry = cache.get(key)
+
+    if (
+        not force_reload
+        and cache_entry
+        and cache_entry.get("sha256") == file_hash
+        and cache_entry.get("file_id")
+    ):
+        logger.info("Using cached OpenAI file ID for %s", key)
+        return cache_entry["file_id"]
+
+    file_id = upload_file(file_path=file_path, purpose=purpose)
+    cache[key] = {
+        "file_id": file_id,
+        "sha256": file_hash,
+        "source_path": str(file_path),
+    }
+    save_upload_cache(cache, cache_path)
+    return file_id
+
+
 def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
     """
     Call OpenAI API with a file reference (for PDFs, images, etc.).
@@ -266,6 +326,46 @@ def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1,
     return False, None, str(last_error) if last_error else "OpenAI API call with file failed"
 
 
+def call_openai_with_files(file_ids, prompt, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
+    """
+    Call OpenAI Responses API with multiple uploaded files.
+
+    Returns:
+        Tuple of (success: bool, response_content: str or None, error: str or None)
+    """
+    client = get_openai_client()
+
+    messages = []
+    if system_message:
+        messages.append({"role": "system", "content": system_message})
+
+    user_content = [{"type": "input_file", "file_id": fid} for fid in file_ids]
+    user_content.append({"type": "input_text", "text": prompt})
+    messages.append({"role": "user", "content": user_content})
+
+    api_params = {"model": model, "input": messages, "max_output_tokens": 16384}
+    if SUPPORTED_MODELS.get(model, {}).get("supports_temperature", True):
+        api_params["temperature"] = temperature
+
+    try:
+        logger.info(f"Calling {model} with files {file_ids}")
+        start_time = time.time()
+        response = client.responses.create(**api_params)
+        response_content = response.output_text.strip()
+        elapsed = time.time() - start_time
+        if elapsed > 60:
+            logger.error(f"Response took {int(elapsed // 60)}m {int(elapsed % 60)}s")
+        else:
+            logger.info(f"Response took {int(round(elapsed))}s")
+        if getattr(response, 'status', None) == 'incomplete':
+            reason = getattr(response, 'incomplete_details', None)
+            logger.warning(f"Response was truncated (incomplete). Reason: {reason}")
+        return True, response_content, None
+    except Exception as e:
+        logger.error(f"OpenAI API call with files failed: {e}")
+        return False, None, str(e)
+
+
 def fix_invalid_json_escapes(s):
     """Replace invalid backslash escapes that GPT OCR output may contain."""
     import re
@@ -291,4 +391,58 @@ def call_openai_with_file_json(file_id, prompt, model=DEFAULT_MODEL, temperature
         except json.JSONDecodeError as e2:
             logger.error(f"Failed to parse JSON: {e2}\nRaw: {content}")
             return False, None, f"JSON parsing failed: {e2}"
+
+
+def call_openai_with_files_json(file_ids, prompt, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
+    """Call OpenAI with multiple files and parse JSON from the response."""
+    success, content, error = call_openai_with_files(file_ids, prompt, model, temperature, system_message)
+    if not success:
+        return False, None, error
+    try:
+        return True, json.loads(content), None
+    except json.JSONDecodeError:
+        try:
+            fixed = fix_invalid_json_escapes(content)
+            return True, json.loads(fixed), None
+        except json.JSONDecodeError as e2:
+            logger.error(f"Failed to parse JSON: {e2}\nRaw: {content}")
+            return False, None, f"JSON parsing failed: {e2}"
+
+
+def call_openai_with_json_prompt_file(
+    prompt_file_path,
+    file_ids=None,
+    model=DEFAULT_MODEL,
+    temperature=0.1,
+    system_message=None,
+):
+    """
+    Load prompt text from file and call OpenAI for JSON output.
+
+    Args:
+        file_ids: Optional list of uploaded OpenAI file IDs.
+        prompt_file_path: Path to a UTF-8 text file containing the prompt.
+        model: OpenAI model to use.
+        temperature: Temperature for models that support it.
+        system_message: Optional system message.
+    """
+    prompt_file_path = Path(prompt_file_path)
+    if not prompt_file_path.exists():
+        raise FileNotFoundError(f"Prompt file not found: {prompt_file_path}")
+
+    prompt = prompt_file_path.read_text(encoding="utf-8").strip()
+    if file_ids:
+        return call_openai_with_files_json(
+            file_ids=file_ids,
+            prompt=prompt,
+            model=model,
+            temperature=temperature,
+            system_message=system_message,
+        )
+    return call_openai_with_json_response(
+        messages=[{"role": "user", "content": prompt}],
+        model=model,
+        temperature=temperature,
+        system_message=system_message,
+    )
  
