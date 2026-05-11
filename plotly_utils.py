@@ -1,4 +1,5 @@
 import sys
+import json
 from pathlib import Path
 local_python_path = str(Path(__file__).parents[1])
 if local_python_path not in sys.path:
@@ -124,6 +125,16 @@ def write_csv(df, filename, output_dir=None, index=False):
     fn = output_dir / "{}.csv".format(filename)
     logger.info("Writing csv to {}".format(fn))
     df.to_csv(fn, index=index)
+
+def write_json(data, filename, output_dir=None, ensure_ascii=False, indent=2):
+    if output_dir is None:
+        output_dir = config['output_dir']
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    fn = output_dir / "{}.json".format(filename)
+    logger.info("Writing json to {}".format(fn))
+    with fn.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=ensure_ascii, indent=indent)
 
 OVERWRITE_FILE = 'overwrite_file'
 OVERWRITE_SHEET = 'overwrite_sheet'

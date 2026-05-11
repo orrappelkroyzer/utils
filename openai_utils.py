@@ -7,6 +7,7 @@ import time
 import json
 import logging
 import hashlib
+import re
 from openai import OpenAI
 from pathlib import Path
 import sys
@@ -161,6 +162,7 @@ def call_openai_with_json_response(messages, model=DEFAULT_MODEL, temperature=0.
         logger.error(f"Failed to parse JSON response: {e}")
         logger.error(f"Raw response: {response_content}")
         return False, None, f"JSON parsing failed: {e}"
+
 _MIME_BY_EXT = {
     ".pdf": "application/pdf",
     ".txt": "text/plain",
@@ -208,7 +210,6 @@ def upload_file(file_path, purpose="user_data"):
 
     raise RuntimeError(f"Failed uploading file after {max_attempts} attempts: {file_path}") from last_error
 
-
 def hash_file(file_path: Path) -> str:
     """Return SHA256 for cache keying."""
     h = hashlib.sha256()
@@ -217,10 +218,8 @@ def hash_file(file_path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
-
 def default_upload_cache_path() -> Path:
     return Path(local_python_path) / ".openai_upload_cache.json"
-
 
 def load_upload_cache(cache_path: Path) -> dict:
     if not cache_path.exists():
@@ -231,11 +230,9 @@ def load_upload_cache(cache_path: Path) -> dict:
         logger.warning("Upload cache is invalid JSON, recreating: %s", cache_path)
         return {}
 
-
 def save_upload_cache(cache: dict, cache_path: Path):
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
-
 
 def upload_file_cached(file_path, cache_key=None, force_reload=False, purpose="user_data", cache_path=None):
     """
@@ -266,7 +263,6 @@ def upload_file_cached(file_path, cache_key=None, force_reload=False, purpose="u
     }
     save_upload_cache(cache, cache_path)
     return file_id
-
 
 def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
     """
@@ -325,8 +321,14 @@ def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1,
 
     return False, None, str(last_error) if last_error else "OpenAI API call with file failed"
 
-
-def call_openai_with_files(file_ids, prompt, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
+def call_openai_with_files(
+    file_ids,
+    prompt,
+    model=DEFAULT_MODEL,
+    temperature=0.1,
+    system_message=None,
+    tools=None,
+):
     """
     Call OpenAI Responses API with multiple uploaded files.
 
@@ -346,6 +348,8 @@ def call_openai_with_files(file_ids, prompt, model=DEFAULT_MODEL, temperature=0.
     api_params = {"model": model, "input": messages, "max_output_tokens": 16384}
     if SUPPORTED_MODELS.get(model, {}).get("supports_temperature", True):
         api_params["temperature"] = temperature
+    if tools:
+        api_params["tools"] = tools
 
     try:
         logger.info(f"Calling {model} with files {file_ids}")
@@ -365,12 +369,10 @@ def call_openai_with_files(file_ids, prompt, model=DEFAULT_MODEL, temperature=0.
         logger.error(f"OpenAI API call with files failed: {e}")
         return False, None, str(e)
 
-
 def fix_invalid_json_escapes(s):
     """Replace invalid backslash escapes that GPT OCR output may contain."""
     import re
     return re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', s)
-
 
 def call_openai_with_file_json(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
     """Call OpenAI with a file and parse JSON from the response."""
@@ -392,10 +394,23 @@ def call_openai_with_file_json(file_id, prompt, model=DEFAULT_MODEL, temperature
             logger.error(f"Failed to parse JSON: {e2}\nRaw: {content}")
             return False, None, f"JSON parsing failed: {e2}"
 
-
-def call_openai_with_files_json(file_ids, prompt, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
+def call_openai_with_files_json(
+    file_ids,
+    prompt,
+    model=DEFAULT_MODEL,
+    temperature=0.1,
+    system_message=None,
+    tools=None,
+):
     """Call OpenAI with multiple files and parse JSON from the response."""
-    success, content, error = call_openai_with_files(file_ids, prompt, model, temperature, system_message)
+    success, content, error = call_openai_with_files(
+        file_ids=file_ids,
+        prompt=prompt,
+        model=model,
+        temperature=temperature,
+        system_message=system_message,
+        tools=tools,
+    )
     if not success:
         return False, None, error
     try:
@@ -408,20 +423,22 @@ def call_openai_with_files_json(file_ids, prompt, model=DEFAULT_MODEL, temperatu
             logger.error(f"Failed to parse JSON: {e2}\nRaw: {content}")
             return False, None, f"JSON parsing failed: {e2}"
 
-
 def call_openai_with_json_prompt_file(
     prompt_file_path,
     file_ids=None,
+    prompt_parameters=None,
     model=DEFAULT_MODEL,
     temperature=0.1,
     system_message=None,
+    tools=None,
 ):
     """
     Load prompt text from file and call OpenAI for JSON output.
 
     Args:
-        file_ids: Optional list of uploaded OpenAI file IDs.
         prompt_file_path: Path to a UTF-8 text file containing the prompt.
+        file_ids: Optional list of uploaded OpenAI file IDs.
+        prompt_parameters: Optional dict for replacing {{param_name}} placeholders.
         model: OpenAI model to use.
         temperature: Temperature for models that support it.
         system_message: Optional system message.
@@ -431,6 +448,17 @@ def call_openai_with_json_prompt_file(
         raise FileNotFoundError(f"Prompt file not found: {prompt_file_path}")
 
     prompt = prompt_file_path.read_text(encoding="utf-8").strip()
+    if prompt_parameters:
+        for parameter_name, parameter_value in prompt_parameters.items():
+            placeholder = f"{{{{{parameter_name}}}}}"
+            if not isinstance(parameter_value, str):
+                parameter_value = json.dumps(parameter_value, ensure_ascii=False)
+            prompt = prompt.replace(placeholder, parameter_value)
+        unresolved_placeholders = sorted(set(re.findall(r"\{\{[a-zA-Z0-9_]+\}\}", prompt)))
+        if unresolved_placeholders:
+            raise ValueError(
+                f"Unresolved prompt placeholders in {prompt_file_path}: {', '.join(unresolved_placeholders)}"
+            )
     if file_ids:
         return call_openai_with_files_json(
             file_ids=file_ids,
@@ -438,6 +466,7 @@ def call_openai_with_json_prompt_file(
             model=model,
             temperature=temperature,
             system_message=system_message,
+            tools=tools,
         )
     return call_openai_with_json_response(
         messages=[{"role": "user", "content": prompt}],
