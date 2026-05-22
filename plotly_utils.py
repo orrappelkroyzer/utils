@@ -104,7 +104,9 @@ def write_output(fig, filename, output_dir, output_type, width, height):
     if output_type == IMAGE:
         fn = output_dir / "{}.png".format(filename)
         func = fig.write_image
-        kw_args = dict(height=height, width=width, engine="orca")
+#        kw_args = dict(height=height, width=width, engine="orca")
+        kw_args = dict(height=height, width=width, engine="kaleido")
+        kw_args = dict(height=height, width=width)
     elif output_type == HTML:
         fn = output_dir / "{}.html".format(filename)
         func = fig.write_html
