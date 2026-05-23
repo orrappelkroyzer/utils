@@ -1,4 +1,5 @@
 import sys
+import json
 from pathlib import Path
 local_python_path = str(Path(__file__).parents[1])
 if local_python_path not in sys.path:
@@ -17,7 +18,106 @@ from openpyxl import load_workbook
 import plotly.express as px
 IMAGE = 'image'
 HTML = 'html'
-font_size = config.get('font_size', 28)
+DEFAULT_FONT_SIZE = config.get('font_size', 36)
+
+
+def apply_layout(fig, layout_params, font_size):
+    """Apply layout parameters including title, base font size, legend and colorbar."""
+    if layout_params is None:
+        layout_params = {}
+
+    # Center title and apply font size if no explicit title supplied
+    if 'title' not in layout_params:
+        layout_params['title'] = {
+            'x': 0.5,
+            'font': {'size': font_size},
+            'xanchor': 'center'
+        }
+
+    # Ensure the default layout font uses this size and set legend/colorbar defaults
+    base_font = layout_params.get('font', {})
+    layout_params['font'] = {
+        'size': base_font.get('size', font_size),
+        **{k: v for k, v in base_font.items() if k != 'size'}
+    }
+
+    # Merge or create legend settings
+    legend_cfg = layout_params.get('legend', {})
+    legend_font = legend_cfg.get('font', {})
+    legend_cfg['font'] = {
+        'size': legend_font.get('size', font_size),
+        **{k: v for k, v in legend_font.items() if k != 'size'}
+    }
+    layout_params['legend'] = legend_cfg
+
+    # Merge or create coloraxis_colorbar settings
+    cab_cfg = layout_params.get('coloraxis_colorbar', {})
+    cab_title = cab_cfg.get('title', {})
+    cab_title_font = cab_title.get('font', {})
+    cab_title['font'] = {
+        'size': cab_title_font.get('size', font_size),
+        **{k: v for k, v in cab_title_font.items() if k != 'size'}
+    }
+    cab_cfg['title'] = cab_title
+
+    cab_tickfont = cab_cfg.get('tickfont', {})
+    cab_cfg['tickfont'] = {
+        'size': cab_tickfont.get('size', font_size),
+        **{k: v for k, v in cab_tickfont.items() if k != 'size'}
+    }
+    layout_params['coloraxis_colorbar'] = cab_cfg
+
+    fig.update_layout(**layout_params)
+    return layout_params
+
+
+def apply_axes(fig, xaxes, yaxes, font_size):
+    """Apply x/y axis parameters including tick and title fonts."""
+    if xaxes is None:
+        xaxes = {}
+    if yaxes is None:
+        yaxes = {}
+
+    t = dict(tickfont={'size': font_size}, title_font={'size': font_size})
+    t.update(xaxes)
+    fig.update_xaxes(**t)
+
+    t = dict(tickfont={'size': font_size}, title_font={'size': font_size})
+    t.update(yaxes)
+    fig.update_yaxes(**t)
+
+
+def apply_annotations(fig, anotations, font_size):
+    """Apply annotations / subplot titles font settings."""
+    if anotations is None:
+        anotations = {}
+    ann_kwargs = dict(font=dict(size=font_size))
+    ann_kwargs.update(anotations)
+    fig.update_annotations(**ann_kwargs)
+
+
+def write_output(fig, filename, output_dir, output_type, width, height):
+    """Write figure to disk as image or HTML."""
+    if output_dir is None:
+        output_dir = config['output_dir']
+
+    if output_type == IMAGE:
+        fn = output_dir / "{}.png".format(filename)
+        func = fig.write_image
+#        kw_args = dict(height=height, width=width, engine="orca")
+        kw_args = dict(height=height, width=width, engine="kaleido")
+        kw_args = dict(height=height, width=width)
+    elif output_type == HTML:
+        fn = output_dir / "{}.html".format(filename)
+        func = fig.write_html
+        kw_args = dict(include_plotlyjs=True)
+    else:
+        raise AssertionError("received illegal output_type {}".format(output_type))
+
+    logger.info("Writing image to {}".format(fn))
+    fn.unlink(missing_ok=True)
+    fn.parents[0].mkdir(parents=True, exist_ok=True)
+    func(fn, **kw_args)
 
 def write_csv(df, filename, output_dir=None, index=False):
     if output_dir is None:
@@ -27,6 +127,16 @@ def write_csv(df, filename, output_dir=None, index=False):
     fn = output_dir / "{}.csv".format(filename)
     logger.info("Writing csv to {}".format(fn))
     df.to_csv(fn, index=index)
+
+def write_json(data, filename, output_dir=None, ensure_ascii=False, indent=2):
+    if output_dir is None:
+        output_dir = config['output_dir']
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    fn = output_dir / "{}.json".format(filename)
+    logger.info("Writing json to {}".format(fn))
+    with fn.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=ensure_ascii, indent=indent)
 
 OVERWRITE_FILE = 'overwrite_file'
 OVERWRITE_SHEET = 'overwrite_sheet'
@@ -115,71 +225,190 @@ def append_row_to_excel(df_row: pd.DataFrame, excel_path: Path, sheet_name: str 
 
 def fix_and_write(fig,
                   filename,
-                  traces = None,
-                  layout_params = {},
-                  output_dir = None,
-                  width_factor = 1,
-                  height_factor = 1,
-                  xaxes={},
-                  yaxes={},
-                  anotations={},
-                  output_type = IMAGE,
-                  font_size = font_size):
+                  traces=None,
+                  layout_params=None,
+                  output_dir=None,
+                  width_factor=1,
+                  height_factor=1,
+                  xaxes=None,
+                  yaxes=None,
+                  anotations=None,
+                  output_type=IMAGE,
+                  font_size=None):
+    """
+    Fix common layout aspects of a Plotly figure and write it to disk.
+
+    Parameters
+    ----------
+    fig : plotly.graph_objects.Figure
+        The figure to modify and save.
+    filename : str
+        Base filename (without extension).
+    traces : dict, optional
+        Passed to fig.update_traces(**traces).
+    layout_params : dict, optional
+        Passed to fig.update_layout(**layout_params).
+    output_dir : Path or str, optional
+        Directory to write the file into. Defaults to config['output_dir'].
+    width_factor, height_factor : float, optional
+        Multipliers for base width/height from config.
+    xaxes, yaxes : dict, optional
+        Extra parameters for fig.update_xaxes / fig.update_yaxes.
+    anotations : dict, optional
+        Extra parameters for fig.update_annotations.
+    output_type : {'image', 'html'}
+        Output format.
+    font_size : int, optional
+        Font size to apply to all text in the figure (axes, titles,
+        annotations, legend, colorbar, and layout default font). If None,
+        falls back to DEFAULT_FONT_SIZE from config.
+    """
+    if font_size is None:
+        font_size = DEFAULT_FONT_SIZE
     width = config.get('width', 1920) * width_factor
     height = config.get('height', 1280) * height_factor
     if traces is not None:
         fig.update_traces(**traces)
-    if 'title' not in layout_params:
-         layout_params['title']={'x':0.5,
-                                  'font_size' : font_size,
-                                 'xanchor': 'center'}
-    # if 'legend' not in layout_params:
-    #     layout_params['legend'] = dict(
-    #         # title_font_family='Courier New',
-    #         font=dict(
-    #             size=40
-    #         )
-    #     )
-    fig.update_layout(**layout_params)
 
-    t = dict(tickfont={'size': font_size}, title_font={'size': font_size})
-    t.update(xaxes)
-    fig.update_xaxes(**t)
-    t = dict(tickfont={'size': font_size}, title_font={'size': font_size})
-    t.update(yaxes)
-    fig.update_yaxes(**t)
-    t = dict(font_size=font_size)
-    t.update(anotations)
-    fig.update_annotations(**anotations)
+    # Layout and text handling
+    layout_params = apply_layout(fig, layout_params, font_size)
+    apply_axes(fig, xaxes, yaxes, font_size)
+    apply_annotations(fig, anotations, font_size)
 
-    fig.update_layout(
-        coloraxis_colorbar=dict(
-            title=dict(font=dict(size=font_size)),  # Enlarge the colorbar title font
-            tickfont=dict(size=font_size)           # Enlarge the colorbar tick labels font
-        ),
-        legend=dict(
-           font=dict(size=font_size)  # Set the font size for the legend
-        )
-    )
+    # Finally, write to disk
+    write_output(fig, filename, output_dir, output_type, width, height)
+
+import plotly.graph_objects as go
+
+_SWATCH_W = 0.04
+_SWATCH_H = 0.03
+_LABEL_GAP = 0.008
+_ENTRY_GAP = 0.04
+_CHAR_W = 0.011
+
+def make_custom_legend(fig, entries, y=-0.22, font_size=28,
+                       swatch_w=_SWATCH_W, swatch_h=_SWATCH_H,
+                       axis_start=10):
+    """Add patterned swatches and labels to *fig* as a hand-drawn legend.
+
+    Parameters
+    ----------
+    fig : plotly.graph_objects.Figure
+    entries : list of (label, color, pattern_shape) tuples.
+        pattern_shape can be "" or None for a solid swatch.
+    y : float
+        Vertical centre of the legend row in paper coordinates.
+    font_size : int
+    swatch_w, swatch_h : float
+        Width and height of each swatch in paper coordinates.
+    axis_start : int
+        First axis index to use for hidden swatch axes (e.g. 10 → xaxis10).
+        Must not collide with axes already on the figure.
+    """
+    entry_widths = [swatch_w + _LABEL_GAP + len(label) * _CHAR_W
+                    for label, *_ in entries]
+    total_w = sum(entry_widths) + (len(entries) - 1) * _ENTRY_GAP
+    cx = 0.5 - total_w / 2
+
+    annotations = []
+    for i, (entry, ew) in enumerate(zip(entries, entry_widths)):
+        label, color = entry[0], entry[1]
+        pattern = entry[2] if len(entry) > 2 else ""
+
+        ax_idx = axis_start + i
+        x_key = f"xaxis{ax_idx}"
+        y_key = f"yaxis{ax_idx}"
+        xref = f"x{ax_idx}"
+        yref = f"y{ax_idx}"
+
+        fig.update_layout(**{
+            x_key: dict(
+                domain=[cx, cx + swatch_w],
+                visible=False, fixedrange=True,
+            ),
+            y_key: dict(
+                domain=[y, y + swatch_h],
+                visible=False, fixedrange=True,
+                anchor=xref,
+            ),
+        })
+
+        fig.add_trace(go.Bar(
+            x=["s"], y=[1],
+            marker=dict(
+                color=color,
+                pattern_shape=pattern or "",
+                pattern_solidity=0.5,
+                line=dict(color="black", width=1),
+            ),
+            showlegend=False,
+            xaxis=xref,
+            yaxis=yref,
+        ))
+
+        annotations.append(dict(
+            xref="paper", yref="paper",
+            x=cx + swatch_w + _LABEL_GAP,
+            y=y + swatch_h / 2,
+            text=label,
+            showarrow=False,
+            xanchor="left",
+            yanchor="middle",
+            font=dict(size=font_size),
+        ))
+        cx += ew + _ENTRY_GAP
+
+    existing = list(fig.layout.annotations or [])
+    fig.update_layout(annotations=existing + annotations)
 
 
-    if output_dir is None:
-        output_dir = config['output_dir']
-    if output_type == IMAGE:
-        fn = output_dir / "{}.png".format(filename)
-        func = fig.write_image
-        kw_args = dict(height=height, width=width,  engine="orca")#dict(scale = width_in_mm * 17780.0)
-    elif output_type == HTML:
-        fn = output_dir / "{}.html".format(filename)
-        func = fig.write_html
-        kw_args = dict(include_plotlyjs=True)
-    else:
-        raise AssertionError("received illegal output_type {}".format(output_type))
+_LINE_SWATCH_W = 0.06
 
-    logger.info("Writing image to {}".format(fn))
-    fn.unlink(missing_ok=True)
-    fn.parents[0].mkdir(parents=True, exist_ok=True)
-    func(fn, **kw_args)
+def make_custom_line_legend(fig, entries, y=0.02, font_size=24):
+    """Add line swatches and labels to *fig* as a hand-drawn legend.
+
+    Parameters
+    ----------
+    fig : plotly.graph_objects.Figure
+    entries : list of (label, color, dash) tuples.
+        dash is a plotly dash string: "solid", "dash", "dot", "dashdot", etc.
+    y : float
+        Vertical centre of the legend row in paper coordinates (must be in [0, 1]).
+    font_size : int
+    """
+    entry_widths = [_LINE_SWATCH_W + _LABEL_GAP + len(label) * _CHAR_W
+                    for label, *_ in entries]
+    total_w = sum(entry_widths) + (len(entries) - 1) * _ENTRY_GAP
+    cx = 0.5 - total_w / 2
+
+    shapes = list(fig.layout.shapes or [])
+    annotations = []
+    for (entry, ew) in zip(entries, entry_widths):
+        label, color = entry[0], entry[1]
+        dash = entry[2] if len(entry) > 2 else "solid"
+
+        shapes.append(dict(
+            type="line",
+            xref="paper", yref="paper",
+            x0=cx, x1=cx + _LINE_SWATCH_W,
+            y0=y, y1=y,
+            line=dict(color=color, width=3, dash=dash),
+        ))
+        annotations.append(dict(
+            xref="paper", yref="paper",
+            x=cx + _LINE_SWATCH_W + _LABEL_GAP,
+            y=y,
+            text=label,
+            showarrow=False,
+            xanchor="left",
+            yanchor="middle",
+            font=dict(size=font_size),
+        ))
+        cx += ew + _ENTRY_GAP
+
+    existing_annots = list(fig.layout.annotations or [])
+    fig.update_layout(shapes=shapes, annotations=existing_annots + annotations)
+
 
 def combine_figures(figs_list):
 
