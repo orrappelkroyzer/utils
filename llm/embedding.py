@@ -1,6 +1,6 @@
 import sys
 from pathlib import Path
-local_python_path = str(Path(__file__).parents[1])
+local_python_path = str(Path(__file__).parents[2])
 if local_python_path not in sys.path:
     sys.path.append(local_python_path)
 from utils.utils import load_config, get_logger
@@ -15,7 +15,7 @@ import pandas as pd
 import plotly.express as px
 from sklearn.decomposition import PCA
 
-from utils.bedrock_utils import embed_texts_from_series
+from utils.llm.bedrock_utils import embed_texts_from_series
 
 
 def clean_ocr_for_embedding(text: str) -> str:
