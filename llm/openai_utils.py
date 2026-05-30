@@ -12,8 +12,8 @@ from openai import OpenAI
 from pathlib import Path
 import sys
 
-# Add parent directory to path for config access
-local_python_path = str(Path(__file__).parents[1])
+# Add project root to path for config access
+local_python_path = str(Path(__file__).parents[2])
 if local_python_path not in sys.path:
     sys.path.append(local_python_path)
 from utils.utils import load_config, get_logger
@@ -66,7 +66,7 @@ def get_openai_client():
     """Get or create OpenAI client instance."""
     global _client
     if _client is None:
-        config = load_config(add_date=False, config_path=Path(__file__).parents[1] / 'config.json')
+        config = load_config(add_date=False, config_path=Path(__file__).parents[2] / 'config.json')
         _client = OpenAI(api_key=config['open_ai_key'])
     return _client
 

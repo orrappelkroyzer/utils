@@ -6,7 +6,7 @@ Workflow for embedding once and querying in separate sessions:
 
 Session 1 (Embed once):
     from pathlib import Path
-    from utils.bedrock_utils import embed_pdfs_only
+    from utils.llm.bedrock_utils import embed_pdfs_only
     
     embed_pdfs_only(
         pdf_directory=Path("path/to/pdfs"),
@@ -15,7 +15,7 @@ Session 1 (Embed once):
 
 Session 2+ (Query multiple times):
     from pathlib import Path
-    from utils.bedrock_utils import load_embeddings_and_create_qa
+    from utils.llm.bedrock_utils import load_embeddings_and_create_qa
     
     qa = load_embeddings_and_create_qa(
         persist_directory=Path("embeddings/my_docs")
@@ -36,8 +36,8 @@ import sys
 import pandas as pd
 import numpy as np
 
-# Add parent directory to path for config access
-local_python_path = str(Path(__file__).parents[1])
+# Add project root to path for config access
+local_python_path = str(Path(__file__).parents[2])
 if local_python_path not in sys.path:
     sys.path.append(local_python_path)
 from utils.utils import load_config, get_logger
