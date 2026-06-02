@@ -17,6 +17,7 @@ local_python_path = str(Path(__file__).parents[2])
 if local_python_path not in sys.path:
     sys.path.append(local_python_path)
 from utils.utils import load_config, get_logger
+from utils.llm.llm_utils import build_prompt_call_metadata, wrap_response_with_metadata
 logger = get_logger(__name__)
 config = load_config(add_date=False, config_path=Path(local_python_path)/ 'config.json')
 
@@ -431,6 +432,9 @@ def call_openai_with_json_prompt_file(
     temperature=0.1,
     system_message=None,
     tools=None,
+    include_response_metadata=False,
+    prompt_version=None,
+    metadata_key="llm_metadata",
 ):
     """
     Load prompt text from file and call OpenAI for JSON output.
@@ -460,7 +464,7 @@ def call_openai_with_json_prompt_file(
                 f"Unresolved prompt placeholders in {prompt_file_path}: {', '.join(unresolved_placeholders)}"
             )
     if file_ids:
-        return call_openai_with_files_json(
+        success, parsed_json, error = call_openai_with_files_json(
             file_ids=file_ids,
             prompt=prompt,
             model=model,
@@ -468,10 +472,29 @@ def call_openai_with_json_prompt_file(
             system_message=system_message,
             tools=tools,
         )
-    return call_openai_with_json_response(
-        messages=[{"role": "user", "content": prompt}],
+    else:
+        success, parsed_json, error = call_openai_with_json_response(
+            messages=[{"role": "user", "content": prompt}],
+            model=model,
+            temperature=temperature,
+            system_message=system_message,
+        )
+
+    if not success:
+        return False, None, error
+
+    if not include_response_metadata:
+        return True, parsed_json, None
+
+    metadata = build_prompt_call_metadata(
+        prompt_file_path=prompt_file_path,
         model=model,
-        temperature=temperature,
-        system_message=system_message,
+        prompt_version=prompt_version,
     )
+    wrapped_payload = wrap_response_with_metadata(
+        response_payload=parsed_json,
+        metadata=metadata,
+        metadata_key=metadata_key,
+    )
+    return True, wrapped_payload, None
  
