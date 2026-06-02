@@ -7,7 +7,7 @@ based on a provider string ("claude" or "openai").
 from pathlib import Path
 import sys
 
-local_python_path = str(Path(__file__).parents[1])
+local_python_path = str(Path(__file__).parents[2])
 if local_python_path not in sys.path:
     sys.path.append(local_python_path)
 from utils.utils import load_config, get_logger
@@ -25,7 +25,7 @@ def upload_text_file(text: str, filename: str, provider: str) -> str:
         return _upload(text, filename)
     else:
         import tempfile, os
-        from utils.openai_utils import upload_file as _upload
+        from utils.llm.openai_utils import upload_file as _upload
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
         tmp.write(text)
         tmp.close()
@@ -41,7 +41,7 @@ def delete_file(file_id: str, provider: str):
         from utils.claude_utils import delete_file as _delete
         _delete(file_id)
     else:
-        from utils.openai_utils import get_openai_client
+        from utils.llm.openai_utils import get_openai_client
         client = get_openai_client()
         client.files.delete(file_id)
         logger.info(f"Deleted OpenAI file {file_id}")
@@ -69,7 +69,7 @@ def call_with_json_response(messages, provider: str, system_message=None, file_i
             file_ids=file_ids,
         )
     elif provider == PROVIDER_OPENAI:
-        from utils.openai_utils import call_openai_with_file_json, call_openai_with_json_response, GPT_5_5
+        from utils.llm.openai_utils import call_openai_with_file_json, call_openai_with_json_response, GPT_5_5
         if file_ids:
             prompt = messages[0]["content"] if messages else ""
             if system_message:

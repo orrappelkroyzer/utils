@@ -104,7 +104,9 @@ def write_output(fig, filename, output_dir, output_type, width, height):
     if output_type == IMAGE:
         fn = output_dir / "{}.png".format(filename)
         func = fig.write_image
-        kw_args = dict(height=height, width=width, engine="orca")
+#        kw_args = dict(height=height, width=width, engine="orca")
+        kw_args = dict(height=height, width=width, engine="kaleido")
+        kw_args = dict(height=height, width=width)
     elif output_type == HTML:
         fn = output_dir / "{}.html".format(filename)
         func = fig.write_html
@@ -177,6 +179,48 @@ def write_excel(df, filename, output_dir=None, sheet_name='Sheet1', index=False,
             return
     else:
         raise AssertionError(f"received illegal override_mode {override_mode}")
+
+
+def append_row_to_excel(df_row: pd.DataFrame, excel_path: Path, sheet_name: str = 'Sheet1'):
+    """
+    Append a single row DataFrame to an existing Excel file.
+    
+    Args:
+        df_row: DataFrame with a single row to append
+        excel_path: Path to the Excel file
+        sheet_name: Name of the sheet to append to
+    """
+    if not excel_path.exists():
+        # Create new file with header
+        df_row.to_excel(excel_path, sheet_name=sheet_name, index=False)
+        return
+    
+    # Load existing workbook
+    wb = load_workbook(excel_path)
+    
+    # Get or create sheet
+    if sheet_name not in wb.sheetnames:
+        ws = wb.create_sheet(sheet_name)
+        # Write header
+        headers = list(df_row.columns)
+        for col_idx, header in enumerate(headers, start=1):
+            ws.cell(row=1, column=col_idx, value=header)
+    else:
+        ws = wb[sheet_name]
+    
+    # Find next empty row
+    next_row = ws.max_row + 1
+    
+    # Write row data
+    for col_idx, col_name in enumerate(df_row.columns, start=1):
+        value = df_row[col_name].iloc[0]
+        # Handle numpy arrays (embeddings) by converting to list
+        if isinstance(value, np.ndarray):
+            value = value.tolist()
+        ws.cell(row=next_row, column=col_idx, value=value)
+    
+    # Save workbook
+    wb.save(excel_path)
 
 
 def fix_and_write(fig,
