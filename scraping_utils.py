@@ -30,6 +30,10 @@ def normalize_whitespace(text):
     return " ".join(str(text).split())
 
 
+def is_security_service_wait_message(text):
+    return normalize_whitespace(text) == CAPTCHA_WAIT_MESSAGE
+
+
 def is_cloudflare_challenge(driver):
     page_text = driver.page_source.lower()
     if "cloudflare" in page_text and ("verify you are human" in page_text or "attention required" in page_text):
@@ -37,7 +41,7 @@ def is_cloudflare_challenge(driver):
     body_elements = driver.find_elements(By.TAG_NAME, "body")
     if body_elements:
         body_text = normalize_whitespace(body_elements[0].text)
-        if body_text == CAPTCHA_WAIT_MESSAGE:
+        if is_security_service_wait_message(body_text):
             return True
     challenge_iframes = driver.find_elements(By.CSS_SELECTOR, "iframe[src*='challenges.cloudflare.com']")
     return len(challenge_iframes) > 0
@@ -52,15 +56,15 @@ def wait_for_page_segments(driver, initial_wait_seconds=20, retry_wait_seconds=1
     time.sleep(initial_wait_seconds)
     waited_seconds += initial_wait_seconds
 
-    while len(driver.find_elements(By.TAG_NAME, "p")) == 0:
+    while not extract_text(driver).strip():
         if waited_seconds >= max_total_wait_seconds:
             raise TimeoutError(
-                f"No <p> segments found after waiting {waited_seconds}s "
+                f"No non-empty <p> text found after waiting {waited_seconds}s "
                 f"(max {max_total_wait_seconds}s)."
             )
         next_wait_seconds = min(retry_wait_seconds, max_total_wait_seconds - waited_seconds)
         logger.info(
-            f"No <p> segments yet after {waited_seconds}s. "
+            f"No non-empty <p> text yet after {waited_seconds}s. "
             f"Waiting {next_wait_seconds}s more."
         )
         time.sleep(next_wait_seconds)
