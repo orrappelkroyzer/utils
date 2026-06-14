@@ -57,15 +57,22 @@ def wait_for_page_segments(driver, initial_wait_seconds=20, retry_wait_seconds=1
     waited_seconds += initial_wait_seconds
 
     while True:
-        text_ready = bool(extract_text(driver).strip())
+        extracted_text = extract_text(driver)
+        text_ready = bool(extracted_text.strip())
+        security_wait_text_active = is_security_service_wait_message(extracted_text)
         challenge_active = is_cloudflare_challenge(driver)
-        if text_ready and not challenge_active:
+        if text_ready and not challenge_active and not security_wait_text_active:
             break
 
         if waited_seconds >= max_total_wait_seconds:
             if challenge_active:
                 raise TimeoutError(
                     f"Cloudflare challenge still active after waiting {waited_seconds}s "
+                    f"(max {max_total_wait_seconds}s)."
+                )
+            if security_wait_text_active:
+                raise TimeoutError(
+                    f"Security-service wait text still active after waiting {waited_seconds}s "
                     f"(max {max_total_wait_seconds}s)."
                 )
             raise TimeoutError(
@@ -77,6 +84,11 @@ def wait_for_page_segments(driver, initial_wait_seconds=20, retry_wait_seconds=1
         if challenge_active:
             logger.info(
                 f"Cloudflare challenge still active after {waited_seconds}s. "
+                f"Waiting {next_wait_seconds}s more."
+            )
+        elif security_wait_text_active:
+            logger.info(
+                f"Security-service wait text still active after {waited_seconds}s. "
                 f"Waiting {next_wait_seconds}s more."
             )
         else:
