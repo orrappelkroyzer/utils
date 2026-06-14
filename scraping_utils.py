@@ -56,22 +56,36 @@ def wait_for_page_segments(driver, initial_wait_seconds=20, retry_wait_seconds=1
     time.sleep(initial_wait_seconds)
     waited_seconds += initial_wait_seconds
 
-    while not extract_text(driver).strip():
+    while True:
+        text_ready = bool(extract_text(driver).strip())
+        challenge_active = is_cloudflare_challenge(driver)
+        if text_ready and not challenge_active:
+            break
+
         if waited_seconds >= max_total_wait_seconds:
+            if challenge_active:
+                raise TimeoutError(
+                    f"Cloudflare challenge still active after waiting {waited_seconds}s "
+                    f"(max {max_total_wait_seconds}s)."
+                )
             raise TimeoutError(
                 f"No non-empty <p> text found after waiting {waited_seconds}s "
                 f"(max {max_total_wait_seconds}s)."
             )
+
         next_wait_seconds = min(retry_wait_seconds, max_total_wait_seconds - waited_seconds)
-        logger.info(
-            f"No non-empty <p> text yet after {waited_seconds}s. "
-            f"Waiting {next_wait_seconds}s more."
-        )
+        if challenge_active:
+            logger.info(
+                f"Cloudflare challenge still active after {waited_seconds}s. "
+                f"Waiting {next_wait_seconds}s more."
+            )
+        else:
+            logger.info(
+                f"No non-empty <p> text yet after {waited_seconds}s. "
+                f"Waiting {next_wait_seconds}s more."
+            )
         time.sleep(next_wait_seconds)
         waited_seconds += next_wait_seconds
-
-    if is_cloudflare_challenge(driver):
-        raise RuntimeError("Cloudflare challenge still active after page wait.")
 
     logger.info(f"Page segments found after {waited_seconds}s")
 
