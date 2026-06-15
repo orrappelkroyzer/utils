@@ -168,15 +168,82 @@ def call_openai_with_json_response(messages, model=DEFAULT_MODEL, temperature=0.
     if not success:
         return False, None, error
     
-    try:
-        # Extract JSON from the response (in case there's extra text)
-        parsed_json = json.loads(response_content)
+    parsed_json, parse_error = parse_json_response_content(response_content)
+    if parsed_json is not None:
         return True, parsed_json, None
-            
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse JSON response: {e}")
-        logger.error(f"Raw response: {response_content}")
-        return False, None, f"JSON parsing failed: {e}"
+
+    logger.warning(f"Initial JSON parsing failed, attempting repair: {parse_error}")
+    repaired_json, repair_error = repair_json_response_with_model(
+        response_content=response_content,
+        model=model,
+        temperature=temperature,
+    )
+    if repaired_json is not None:
+        return True, repaired_json, None
+
+    logger.error(f"Failed to parse JSON response: {parse_error}")
+    logger.error(f"Failed to repair JSON response: {repair_error}")
+    logger.error(f"Raw response: {response_content}")
+    return False, None, f"JSON parsing failed: {parse_error}; repair failed: {repair_error}"
+
+
+def parse_json_response_content(response_content):
+    parse_attempts = []
+    raw_text = str(response_content).strip()
+    parse_attempts.append(raw_text)
+
+    no_fence_text = raw_text
+    if "```" in no_fence_text:
+        no_fence_text = re.sub(r"^```(?:json)?\s*", "", no_fence_text, flags=re.IGNORECASE)
+        no_fence_text = re.sub(r"\s*```$", "", no_fence_text, flags=re.IGNORECASE)
+        no_fence_text = no_fence_text.strip()
+        parse_attempts.append(no_fence_text)
+
+    object_candidate = no_fence_text
+    start_idx = object_candidate.find("{")
+    end_idx = object_candidate.rfind("}")
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        object_candidate = object_candidate[start_idx:end_idx + 1].strip()
+        parse_attempts.append(object_candidate)
+
+    if object_candidate:
+        trailing_comma_fixed = re.sub(r",\s*([}\]])", r"\1", object_candidate)
+        parse_attempts.append(trailing_comma_fixed)
+        parse_attempts.append(fix_invalid_json_escapes(trailing_comma_fixed))
+
+    last_error = None
+    seen = set()
+    for candidate in parse_attempts:
+        if candidate in seen or not candidate:
+            continue
+        seen.add(candidate)
+        try:
+            return json.loads(candidate), None
+        except json.JSONDecodeError as exc:
+            last_error = str(exc)
+            continue
+    return None, last_error or "Unknown JSON parse error"
+
+
+def repair_json_response_with_model(response_content, model=DEFAULT_MODEL, temperature=0.1):
+    repair_prompt = (
+        "Convert the following text into valid JSON.\n"
+        "Return only valid JSON. Do not include markdown or explanations.\n\n"
+        f"{response_content}"
+    )
+    success, repaired_text, error = call_openai_api(
+        messages=[{"role": "user", "content": repair_prompt}],
+        model=model,
+        temperature=temperature,
+        system_message=None,
+    )
+    if not success:
+        return None, error
+
+    repaired_json, parse_error = parse_json_response_content(repaired_text)
+    if repaired_json is None:
+        return None, parse_error
+    return repaired_json, None
 
 _MIME_BY_EXT = {
     ".pdf": "application/pdf",
@@ -519,6 +586,28 @@ def get_missing_required_fields(response_payload, required_fields):
     return [field for field in required_fields if field not in response_payload]
 
 
+def get_readable_key_name(key_name):
+    return str(key_name).replace("_", " ").strip()
+
+
+def get_readable_key_names(key_names):
+    return [get_readable_key_name(key_name) for key_name in key_names]
+
+
+def get_deleted_keys(response_payload, required_fields):
+    if not isinstance(response_payload, dict):
+        return []
+    required_set = set(required_fields)
+    return [key for key in response_payload.keys() if key not in required_set]
+
+
+def keep_only_required_fields(response_payload, required_fields):
+    if not isinstance(response_payload, dict):
+        return response_payload
+    required_set = set(required_fields)
+    return {key: value for key, value in response_payload.items() if key in required_set}
+
+
 def get_missing_fields_type_hints(missing_fields):
     hints = []
     for field_name in missing_fields:
@@ -545,7 +634,11 @@ def run_repair_prompt_call(
     prompt_version,
     metadata_key,
 ):
-    logger.warning(f"Initial JSON response missing fields: {missing_fields}. Running repair call.")
+    readable_missing_fields = get_readable_key_names(missing_fields)
+    logger.warning(
+        f"Initial JSON response missing fields: {missing_fields} "
+        f"(readable: {readable_missing_fields}). Running repair call."
+    )
     repair_prompt_parameters = repair_prompt_parameters or {}
     repair_parameters = dict(repair_prompt_parameters)
     if locked_reference_fields:
@@ -585,6 +678,7 @@ def run_repair_prompt_call(
         "repair_prompt_file_name": repair_call_metadata.get("prompt_file_name", ""),
         "repair_prompt_version": repair_call_metadata.get("prompt_version", ""),
         "repair_missing_fields": missing_fields,
+        "repair_missing_fields_readable": readable_missing_fields,
     }
     return True, repair_response, repair_metadata, None
 
@@ -616,8 +710,16 @@ def call_openai_with_json_prompt_file_with_repair(
     if not success:
         return False, None, error
 
-    initial_response = initial_payload["response"]
+    initial_response_raw = initial_payload["response"]
     initial_metadata = initial_payload[metadata_key]
+    deleted_keys = get_deleted_keys(initial_response_raw, required_fields)
+    deleted_keys_readable = get_readable_key_names(deleted_keys)
+    initial_response = keep_only_required_fields(initial_response_raw, required_fields)
+    if deleted_keys:
+        logger.warning(
+            f"Initial JSON response included extra keys that were deleted: {deleted_keys} "
+            f"(readable: {deleted_keys_readable})"
+        )
     missing_fields = get_missing_required_fields(initial_response, required_fields)
     repaired_response = initial_response
     repair_metadata = {
@@ -625,6 +727,9 @@ def call_openai_with_json_prompt_file_with_repair(
         "repair_prompt_file_name": "",
         "repair_prompt_version": "",
         "repair_missing_fields": [],
+        "repair_missing_fields_readable": [],
+        "deleted_keys": deleted_keys,
+        "deleted_keys_readable": deleted_keys_readable,
     }
 
     if missing_fields:
