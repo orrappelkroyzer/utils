@@ -112,3 +112,27 @@ def handle_cloudflare_if_needed(driver, url):
     )
     driver.get(url)
     logger.info("Continuing after manual Cloudflare confirmation")
+
+
+def wait_for_cdnc_content_ready(
+    driver,
+    url,
+    pre_wait_seconds=10,
+    initial_wait_seconds=20,
+    retry_wait_seconds=10,
+    max_total_wait_seconds=300,
+):
+    logger.info(
+        f"Preparing page for extraction (pre_wait={pre_wait_seconds}s, "
+        f"initial={initial_wait_seconds}s, retry={retry_wait_seconds}s, "
+        f"max={max_total_wait_seconds}s)"
+    )
+    if pre_wait_seconds > 0:
+        time.sleep(pre_wait_seconds)
+    handle_cloudflare_if_needed(driver, url)
+    wait_for_page_segments(
+        driver,
+        initial_wait_seconds=initial_wait_seconds,
+        retry_wait_seconds=retry_wait_seconds,
+        max_total_wait_seconds=max_total_wait_seconds,
+    )
