@@ -16,6 +16,7 @@ local_python_path = str(Path(__file__).parents[1])
 if local_python_path not in sys.path:
     sys.path.append(local_python_path)
 from utils.utils import load_config, get_logger
+from utils.llm.llm_utils import build_prompt_call_metadata, wrap_response_with_metadata
 
 logger = get_logger(__name__)
 config = load_config(add_date=False, config_path=Path(local_python_path) / 'config.json')
@@ -193,3 +194,71 @@ def call_claude_with_json_response(messages, model=DEFAULT_MODEL, temperature=0.
 
     logger.error(f"Failed to parse JSON response. Raw response:\n{response_content}")
     return False, None, f"JSON parsing failed for response: {response_content[:200]}"
+
+
+def call_claude_with_json_prompt_file(
+    prompt_file_path,
+    file_ids=None,
+    prompt_parameters=None,
+    model=DEFAULT_MODEL,
+    temperature=0.1,
+    system_message=None,
+    max_tokens=DEFAULT_MAX_TOKENS,
+    include_response_metadata=False,
+    prompt_version=None,
+    metadata_key="llm_metadata",
+):
+    """
+    Load prompt text from file and call Claude for JSON output.
+
+    Args:
+        prompt_file_path: Path to a UTF-8 text file containing the prompt.
+        file_ids: Optional list of uploaded Claude file IDs.
+        prompt_parameters: Optional dict for replacing {{param_name}} placeholders.
+        model: Claude model to use.
+        temperature: Sampling temperature.
+        system_message: Optional system message.
+        max_tokens: Maximum tokens in response.
+    """
+    prompt_file_path = Path(prompt_file_path)
+    if not prompt_file_path.exists():
+        raise FileNotFoundError(f"Prompt file not found: {prompt_file_path}")
+
+    prompt = prompt_file_path.read_text(encoding="utf-8").strip()
+    if prompt_parameters:
+        for parameter_name, parameter_value in prompt_parameters.items():
+            placeholder = f"{{{{{parameter_name}}}}}"
+            if not isinstance(parameter_value, str):
+                parameter_value = json.dumps(parameter_value, ensure_ascii=False)
+            prompt = prompt.replace(placeholder, parameter_value)
+        unresolved_placeholders = sorted(set(re.findall(r"\{\{[a-zA-Z0-9_]+\}\}", prompt)))
+        if unresolved_placeholders:
+            raise ValueError(
+                f"Unresolved prompt placeholders in {prompt_file_path}: {', '.join(unresolved_placeholders)}"
+            )
+
+    success, parsed_json, error = call_claude_with_json_response(
+        messages=[{"role": "user", "content": prompt}],
+        model=model,
+        temperature=temperature,
+        system_message=system_message,
+        max_tokens=max_tokens,
+        file_ids=file_ids,
+    )
+    if not success:
+        return False, None, error
+
+    if not include_response_metadata:
+        return True, parsed_json, None
+
+    metadata = build_prompt_call_metadata(
+        prompt_file_path=prompt_file_path,
+        model=model,
+        prompt_version=prompt_version,
+    )
+    wrapped_payload = wrap_response_with_metadata(
+        response_payload=parsed_json,
+        metadata=metadata,
+        metadata_key=metadata_key,
+    )
+    return True, wrapped_payload, None
