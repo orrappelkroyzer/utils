@@ -1,4 +1,5 @@
 import sys
+import random
 import time
 from pathlib import Path
 
@@ -136,3 +137,59 @@ def wait_for_cdnc_content_ready(
         retry_wait_seconds=retry_wait_seconds,
         max_total_wait_seconds=max_total_wait_seconds,
     )
+
+
+def wait_for_searchresults_ready(
+    driver,
+    url,
+    pre_wait_seconds=10,
+    retry_wait_seconds=10,
+    max_total_wait_seconds=300,
+):
+    logger.info(
+        f"Preparing search page (pre_wait={pre_wait_seconds}s, "
+        f"retry={retry_wait_seconds}s, max={max_total_wait_seconds}s)"
+    )
+    if pre_wait_seconds > 0:
+        time.sleep(pre_wait_seconds)
+    handle_cloudflare_if_needed(driver, url)
+
+    waited_seconds = 0
+    while True:
+        challenge_active = is_cloudflare_challenge(driver)
+        search_results_elements = driver.find_elements(By.CLASS_NAME, "searchresults")
+        has_search_results = len(search_results_elements) > 0
+        if has_search_results and not challenge_active:
+            logger.info(f"Search results container found after {waited_seconds}s")
+            return
+
+        if waited_seconds >= max_total_wait_seconds:
+            if challenge_active:
+                raise TimeoutError(
+                    f"Cloudflare/security challenge still active after waiting {waited_seconds}s "
+                    f"(max {max_total_wait_seconds}s)."
+                )
+            raise TimeoutError(
+                f"No searchresults container found after waiting {waited_seconds}s "
+                f"(max {max_total_wait_seconds}s)."
+            )
+
+        next_wait_seconds = min(retry_wait_seconds, max_total_wait_seconds - waited_seconds)
+        if challenge_active:
+            logger.info(
+                f"Security/challenge still active after {waited_seconds}s. "
+                f"Waiting {next_wait_seconds}s more."
+            )
+        else:
+            logger.info(
+                f"No searchresults container yet after {waited_seconds}s. "
+                f"Waiting {next_wait_seconds}s more."
+            )
+        time.sleep(next_wait_seconds)
+        waited_seconds += next_wait_seconds
+
+
+def sleep_between_fetches(min_sleep_seconds, max_sleep_seconds):
+    sleep_seconds = random.uniform(min_sleep_seconds, max_sleep_seconds)
+    logger.info(f"Sleeping {sleep_seconds:.1f}s before next fetch")
+    time.sleep(sleep_seconds)
