@@ -31,7 +31,7 @@ GPT_5_4 = "gpt-5.4"
 GPT_5_4_MINI = "gpt-5.4-mini"
 
 # Default model
-DEFAULT_MODEL = GPT_5_MINI
+DEFAULT_MODEL = GPT_5_4_MINI
 
 # Define supported models and their capabilities
 SUPPORTED_MODELS = {
