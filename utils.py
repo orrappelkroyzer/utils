@@ -45,6 +45,28 @@ def get_decade_str(year: int) -> str:
     """Convert a year to its decade string (e.g., 2023 -> '2020')."""
     return str(year // 10 * 10)
 
+
+def normalize_text_value(value, lowercase: bool = True) -> str:
+    if value is None:
+        return ""
+    if pd.isna(value):
+        return ""
+    text = str(value).strip()
+    if text.lower() in {"nan", "none", "null"}:
+        return ""
+    if lowercase:
+        text = text.lower()
+    return text
+
+
+def normalize_for_filename(value) -> str:
+    normalized_text = normalize_text_value(value=value, lowercase=True)
+    safe = "".join(ch if ch.isalnum() else "_" for ch in normalized_text)
+    while "__" in safe:
+        safe = safe.replace("__", "_")
+    return safe.strip("_")
+
+
 def load_config(config_path: Union[Path, str] = Path("config.json"), output_dir_suffix: str = None, add_date: str = DATE) -> dict:
     with open(config_path, encoding='utf-8') as f:
         config = json.load(f)

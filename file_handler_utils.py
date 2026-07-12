@@ -63,10 +63,6 @@ def read_json(file_path, **kwargs):
             return json.load(f, **kwargs)
 
 
-def read_jsonn(file_path, **kwargs):
-    return read_json(file_path=file_path, **kwargs)
-
-
 def write_excel(
     df,
     filename,
