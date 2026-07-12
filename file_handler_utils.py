@@ -4,10 +4,12 @@ local_python_path = str(Path(__file__).parents[1])
 if local_python_path not in sys.path:
    sys.path.append(local_python_path)
 from utils.utils import load_config, get_logger
+from utils.utils import normalize_for_filename
 logger = get_logger(__name__)
 config = load_config(Path(local_python_path) / "config.json")
 
 import json
+from argparse import Namespace
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -30,6 +32,31 @@ def write_csv(df, filename, output_dir=None, index=False):
     lock_path = Path(f"{fn}.lock")
     with file_lock(lock_path=lock_path, timeout_seconds=600.0):
         df.to_csv(fn, index=index)
+
+
+def write_command_line_arguments_csv(
+    arguments,
+    output_dir=None,
+):
+    if not isinstance(arguments, Namespace):
+        raise TypeError("arguments must be an argparse.Namespace.")
+
+    script_value = getattr(arguments, "script_path", None) or sys.argv[0]
+    script_name = normalize_for_filename(Path(script_value).stem) or "script"
+    rows = [
+        {"argument": str(key), "value": str(value)}
+        for key, value in vars(arguments).items()
+    ]
+    rows.append({"argument": "raw_argv", "value": " ".join(sys.argv)})
+    arguments_df = pd.DataFrame(rows)
+    filename = f"run_arguments_{script_name}"
+    write_csv(
+        arguments_df,
+        filename=filename,
+        output_dir=output_dir,
+        index=False,
+    )
+    return Path(output_dir if output_dir is not None else config["output_dir"]) / f"{filename}.csv"
 
 
 def read_csv(file_path, **kwargs):
