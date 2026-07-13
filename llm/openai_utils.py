@@ -301,7 +301,12 @@ def hash_file(file_path: Path) -> str:
     return h.hexdigest()
 
 def default_upload_cache_path() -> Path:
-    return Path(local_python_path) / ".openai_upload_cache.json"
+    cache_dir = config.get("cache_dir")
+    if cache_dir is None:
+        raise KeyError("Missing 'cache_dir' in config.json")
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / ".openai_upload_cache.json"
 
 def load_upload_cache(cache_path: Path) -> dict:
     if not cache_path.exists():
