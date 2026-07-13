@@ -6,9 +6,15 @@ if local_python_path not in sys.path:
 from utils.utils import load_config, get_logger
 logger = get_logger(__name__)
 config = load_config(Path(local_python_path) / "config.json") 
+import json
+import os
+import subprocess
+import tempfile
+
 from matplotlib import cm
 from matplotlib import pyplot as plt
 import numpy as np
+import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 import plotly.express as px
@@ -16,6 +22,12 @@ import plotly.express as px
 IMAGE = 'image'
 HTML = 'html'
 DEFAULT_FONT_SIZE = config.get('font_size', 36)
+PLOTLY_IMAGE_TIMEOUT_SECONDS = 90
+PLOTLY_WORKER_JSON_ENV = "PLOTLY_UTILS_WORKER_JSON"
+PLOTLY_WORKER_FILENAME_ENV = "PLOTLY_UTILS_WORKER_FILENAME"
+PLOTLY_WORKER_OUTPUT_DIR_ENV = "PLOTLY_UTILS_WORKER_OUTPUT_DIR"
+PLOTLY_WORKER_WIDTH_FACTOR_ENV = "PLOTLY_UTILS_WORKER_WIDTH_FACTOR"
+PLOTLY_WORKER_HEIGHT_FACTOR_ENV = "PLOTLY_UTILS_WORKER_HEIGHT_FACTOR"
 
 
 def apply_layout(fig, layout_params, font_size):
@@ -170,8 +182,6 @@ def fix_and_write(fig,
 
     # Finally, write to disk
     write_output(fig, filename, output_dir, output_type, width, height)
-
-import plotly.graph_objects as go
 
 _SWATCH_W = 0.04
 _SWATCH_H = 0.03
@@ -391,3 +401,111 @@ tab20 = [[31, 119, 180],
     #     return ['rgb({})'.format(",".join([str(x) for x in y])) for y in colors], \
     #         ['rgba({},0.2)'.format(",".join([str(x) for x in y])) for y in colors]
     # return ['rgb({})'.format(",".join([str(x) for x in y])) for y in colors]
+
+
+def is_valid_plotly_png(output_dir, filename, previous_mtime_ns=None):
+    output_path = Path(output_dir) / f"{filename}.png"
+    if not output_path.exists() or output_path.stat().st_size <= 0:
+        return False
+    if previous_mtime_ns is None:
+        return True
+    return output_path.stat().st_mtime_ns != previous_mtime_ns
+
+
+def get_plotly_worker_environment(
+    figure_json_path,
+    filename,
+    output_dir,
+    width_factor,
+    height_factor,
+):
+    worker_environment = os.environ.copy()
+    worker_environment.update({
+        PLOTLY_WORKER_JSON_ENV: str(figure_json_path),
+        PLOTLY_WORKER_FILENAME_ENV: str(filename),
+        PLOTLY_WORKER_OUTPUT_DIR_ENV: str(output_dir),
+        PLOTLY_WORKER_WIDTH_FACTOR_ENV: str(width_factor),
+        PLOTLY_WORKER_HEIGHT_FACTOR_ENV: str(height_factor),
+    })
+    return worker_environment
+
+
+def kill_process_tree(process):
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    else:
+        process.kill()
+    process.wait()
+
+
+def run_plotly_image_worker():
+    figure_json_path = Path(os.environ[PLOTLY_WORKER_JSON_ENV])
+    figure = go.Figure(json.loads(figure_json_path.read_text(encoding="utf-8")))
+    fix_and_write(
+        figure,
+        os.environ[PLOTLY_WORKER_FILENAME_ENV],
+        output_dir=Path(os.environ[PLOTLY_WORKER_OUTPUT_DIR_ENV]),
+        width_factor=float(os.environ[PLOTLY_WORKER_WIDTH_FACTOR_ENV]),
+        height_factor=float(os.environ[PLOTLY_WORKER_HEIGHT_FACTOR_ENV]),
+    )
+
+
+def write_plotly_image_with_timeout(
+    fig,
+    filename,
+    output_dir,
+    width_factor,
+    height_factor,
+    timeout_seconds=PLOTLY_IMAGE_TIMEOUT_SECONDS,
+):
+    output_path = Path(output_dir) / f"{filename}.png"
+    previous_mtime_ns = output_path.stat().st_mtime_ns if output_path.exists() else None
+    with tempfile.TemporaryDirectory() as temp_dir:
+        figure_json_path = Path(temp_dir) / "figure.json"
+        figure_json_path.write_text(fig.to_json(), encoding="utf-8")
+        worker_environment = get_plotly_worker_environment(
+            figure_json_path,
+            filename,
+            output_dir,
+            width_factor,
+            height_factor,
+        )
+        process = subprocess.Popen(
+            [sys.executable, "-m", "utils.plotly_utils"],
+            cwd=local_python_path,
+            env=worker_environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            logger.error(
+                f"Kaleido timed out after {timeout_seconds} seconds while writing "
+                f"{filename}.png; terminating its process tree"
+            )
+            kill_process_tree(process)
+            if is_valid_plotly_png(output_dir, filename, previous_mtime_ns):
+                logger.warning(
+                    f"Keeping {filename}.png because Kaleido completed the image before hanging"
+                )
+                return True
+            return False
+
+        if process.returncode == 0:
+            return True
+        logger.error(
+            f"Plotly image worker failed for {filename}.png with exit code "
+            f"{process.returncode}: {stderr.strip() or stdout.strip()}"
+        )
+        return is_valid_plotly_png(output_dir, filename, previous_mtime_ns)
+
+
+if __name__ == "__main__" and PLOTLY_WORKER_JSON_ENV in os.environ:
+    run_plotly_image_worker()
