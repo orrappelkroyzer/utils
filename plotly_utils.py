@@ -1,5 +1,4 @@
 import sys
-import json
 from pathlib import Path
 local_python_path = str(Path(__file__).parents[1])
 if local_python_path not in sys.path:
@@ -11,11 +10,9 @@ from matplotlib import cm
 from matplotlib import pyplot as plt
 import numpy as np
 from plotly.subplots import make_subplots
-import pandas as pd
-
-from openpyxl import load_workbook
 
 import plotly.express as px
+
 IMAGE = 'image'
 HTML = 'html'
 DEFAULT_FONT_SIZE = config.get('font_size', 36)
@@ -118,110 +115,6 @@ def write_output(fig, filename, output_dir, output_type, width, height):
     fn.unlink(missing_ok=True)
     fn.parents[0].mkdir(parents=True, exist_ok=True)
     func(fn, **kw_args)
-
-def write_csv(df, filename, output_dir=None, index=False):
-    if output_dir is None:
-        output_dir = config['output_dir']
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    fn = output_dir / "{}.csv".format(filename)
-    logger.info("Writing csv to {}".format(fn))
-    df.to_csv(fn, index=index)
-
-def write_json(data, filename, output_dir=None, ensure_ascii=False, indent=2):
-    if output_dir is None:
-        output_dir = config['output_dir']
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    fn = output_dir / "{}.json".format(filename)
-    logger.info("Writing json to {}".format(fn))
-    with fn.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=ensure_ascii, indent=indent)
-
-OVERWRITE_FILE = 'overwrite_file'
-OVERWRITE_SHEET = 'overwrite_sheet'
-APPEND_SHEET = 'append_sheet'
-
-def write_excel(df, filename, output_dir=None, sheet_name='Sheet1', index=False, override_mode=OVERWRITE_FILE):
-    if output_dir is None:
-        output_dir = config['output_dir']
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    fn = output_dir / "{}.xlsx".format(filename)
-    logger.info(f"Writing excel to sheet {sheet_name} in file {fn}")
-    if not fn.exists() or override_mode == OVERWRITE_FILE:
-        df.to_excel(fn, sheet_name=sheet_name, index=index)
-        return
-    # File exists and override is False
-    if override_mode == OVERWRITE_SHEET:
-        # Try pandas native sheet replace first
-        try:
-            with pd.ExcelWriter(fn, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:  # type: ignore
-                df.to_excel(writer, sheet_name=sheet_name, index=index)
-            return
-        except TypeError:
-            # Fallback for older pandas: manually delete sheet then append
-            try:
-                wb = load_workbook(fn)
-                if sheet_name in wb.sheetnames:
-                    ws = wb[sheet_name]
-                    wb.remove(ws)
-                    wb.save(fn)
-            except Exception as e:
-                logger.warning(f"Failed to remove existing sheet '{sheet_name}' from {fn}: {e}")
-            # Now append the new sheet
-            with pd.ExcelWriter(fn, engine='openpyxl', mode='a') as writer:
-                df.to_excel(writer, sheet_name=sheet_name, index=index)
-            return
-    elif override_mode == APPEND_SHEET:
-        with pd.ExcelWriter(fn, engine='openpyxl', mode='a') as writer:
-            df.to_excel(writer, sheet_name=sheet_name, index=index)
-            return
-    else:
-        raise AssertionError(f"received illegal override_mode {override_mode}")
-
-
-def append_row_to_excel(df_row: pd.DataFrame, excel_path: Path, sheet_name: str = 'Sheet1'):
-    """
-    Append a single row DataFrame to an existing Excel file.
-    
-    Args:
-        df_row: DataFrame with a single row to append
-        excel_path: Path to the Excel file
-        sheet_name: Name of the sheet to append to
-    """
-    if not excel_path.exists():
-        # Create new file with header
-        df_row.to_excel(excel_path, sheet_name=sheet_name, index=False)
-        return
-    
-    # Load existing workbook
-    wb = load_workbook(excel_path)
-    
-    # Get or create sheet
-    if sheet_name not in wb.sheetnames:
-        ws = wb.create_sheet(sheet_name)
-        # Write header
-        headers = list(df_row.columns)
-        for col_idx, header in enumerate(headers, start=1):
-            ws.cell(row=1, column=col_idx, value=header)
-    else:
-        ws = wb[sheet_name]
-    
-    # Find next empty row
-    next_row = ws.max_row + 1
-    
-    # Write row data
-    for col_idx, col_name in enumerate(df_row.columns, start=1):
-        value = df_row[col_name].iloc[0]
-        # Handle numpy arrays (embeddings) by converting to list
-        if isinstance(value, np.ndarray):
-            value = value.tolist()
-        ws.cell(row=next_row, column=col_idx, value=value)
-    
-    # Save workbook
-    wb.save(excel_path)
-
 
 def fix_and_write(fig,
                   filename,

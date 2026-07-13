@@ -1,6 +1,7 @@
 import time
 import sys
 import os
+from contextlib import contextmanager
 from pathlib import Path
 local_python_path = str(Path(__file__).parents[1])
 if local_python_path not in sys.path:
@@ -33,4 +34,16 @@ def release_file_lock(lock_path: Path):
     """Release the inter-process file lock by removing the lock file."""
     Path(lock_path).unlink(missing_ok=True)
     
+
+@contextmanager
+def file_lock(lock_path: Path, timeout_seconds: float = 60.0, poll_seconds: float = 0.1):
+    acquire_file_lock(
+        lock_path=lock_path,
+        timeout_seconds=timeout_seconds,
+        poll_seconds=poll_seconds,
+    )
+    try:
+        yield
+    finally:
+        release_file_lock(lock_path=lock_path)
 

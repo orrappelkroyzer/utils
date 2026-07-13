@@ -31,7 +31,7 @@ GPT_5_4 = "gpt-5.4"
 GPT_5_4_MINI = "gpt-5.4-mini"
 
 # Default model
-DEFAULT_MODEL = GPT_5_MINI
+DEFAULT_MODEL = GPT_5_4_MINI
 
 # Define supported models and their capabilities
 SUPPORTED_MODELS = {
@@ -112,6 +112,11 @@ def call_openai_api(messages, model=DEFAULT_MODEL, temperature=0.1, system_messa
 
             # Parse the response
             response_content = response.choices[0].message.content.strip()
+            finish_reason = response.choices[0].finish_reason
+            usage = getattr(response, "usage", None)
+            prompt_tokens = getattr(usage, "prompt_tokens", None) if usage is not None else None
+            completion_tokens = getattr(usage, "completion_tokens", None) if usage is not None else None
+            total_tokens = getattr(usage, "total_tokens", None) if usage is not None else None
             end_time = time.time()
             execution_time = end_time - start_time
 
@@ -119,6 +124,15 @@ def call_openai_api(messages, model=DEFAULT_MODEL, temperature=0.1, system_messa
                 logger.error(f"Response from {candidate_model} took {int(execution_time // 60)} minutes and {int(round(execution_time % 60))} seconds")
             else:
                 logger.info(f"Response from {candidate_model} took {int(round(execution_time))} seconds")
+            logger.info(
+                f"OpenAI diagnostics: model={candidate_model}, finish_reason={finish_reason}, "
+                f"prompt_tokens={prompt_tokens}, completion_tokens={completion_tokens}, total_tokens={total_tokens}"
+            )
+            if finish_reason == "length":
+                logger.warning(
+                    f"OpenAI completion ended with finish_reason=length for model {candidate_model}. "
+                    "Output may be truncated."
+                )
 
             return True, response_content, None
         except Exception as e:
@@ -154,15 +168,82 @@ def call_openai_with_json_response(messages, model=DEFAULT_MODEL, temperature=0.
     if not success:
         return False, None, error
     
-    try:
-        # Extract JSON from the response (in case there's extra text)
-        parsed_json = json.loads(response_content)
+    parsed_json, parse_error = parse_json_response_content(response_content)
+    if parsed_json is not None:
         return True, parsed_json, None
-            
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse JSON response: {e}")
-        logger.error(f"Raw response: {response_content}")
-        return False, None, f"JSON parsing failed: {e}"
+
+    logger.warning(f"Initial JSON parsing failed, attempting repair: {parse_error}")
+    repaired_json, repair_error = repair_json_response_with_model(
+        response_content=response_content,
+        model=model,
+        temperature=temperature,
+    )
+    if repaired_json is not None:
+        return True, repaired_json, None
+
+    logger.error(f"Failed to parse JSON response: {parse_error}")
+    logger.error(f"Failed to repair JSON response: {repair_error}")
+    logger.error(f"Raw response: {response_content}")
+    return False, None, f"JSON parsing failed: {parse_error}; repair failed: {repair_error}"
+
+
+def parse_json_response_content(response_content):
+    parse_attempts = []
+    raw_text = str(response_content).strip()
+    parse_attempts.append(raw_text)
+
+    no_fence_text = raw_text
+    if "```" in no_fence_text:
+        no_fence_text = re.sub(r"^```(?:json)?\s*", "", no_fence_text, flags=re.IGNORECASE)
+        no_fence_text = re.sub(r"\s*```$", "", no_fence_text, flags=re.IGNORECASE)
+        no_fence_text = no_fence_text.strip()
+        parse_attempts.append(no_fence_text)
+
+    object_candidate = no_fence_text
+    start_idx = object_candidate.find("{")
+    end_idx = object_candidate.rfind("}")
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        object_candidate = object_candidate[start_idx:end_idx + 1].strip()
+        parse_attempts.append(object_candidate)
+
+    if object_candidate:
+        trailing_comma_fixed = re.sub(r",\s*([}\]])", r"\1", object_candidate)
+        parse_attempts.append(trailing_comma_fixed)
+        parse_attempts.append(fix_invalid_json_escapes(trailing_comma_fixed))
+
+    last_error = None
+    seen = set()
+    for candidate in parse_attempts:
+        if candidate in seen or not candidate:
+            continue
+        seen.add(candidate)
+        try:
+            return json.loads(candidate), None
+        except json.JSONDecodeError as exc:
+            last_error = str(exc)
+            continue
+    return None, last_error or "Unknown JSON parse error"
+
+
+def repair_json_response_with_model(response_content, model=DEFAULT_MODEL, temperature=0.1):
+    repair_prompt = (
+        "Convert the following text into valid JSON.\n"
+        "Return only valid JSON. Do not include markdown or explanations.\n\n"
+        f"{response_content}"
+    )
+    success, repaired_text, error = call_openai_api(
+        messages=[{"role": "user", "content": repair_prompt}],
+        model=model,
+        temperature=temperature,
+        system_message=None,
+    )
+    if not success:
+        return None, error
+
+    repaired_json, parse_error = parse_json_response_content(repaired_text)
+    if repaired_json is None:
+        return None, parse_error
+    return repaired_json, None
 
 _MIME_BY_EXT = {
     ".pdf": "application/pdf",
@@ -499,6 +580,192 @@ def call_openai_with_json_prompt_file(
     wrapped_payload = wrap_response_with_metadata(
         response_payload=parsed_json,
         metadata=metadata,
+        metadata_key=metadata_key,
+    )
+    return True, wrapped_payload, None
+
+
+def get_missing_required_fields(response_payload, required_fields):
+    if not isinstance(response_payload, dict):
+        return list(required_fields)
+    return [field for field in required_fields if field not in response_payload]
+
+
+def get_readable_key_name(key_name):
+    return str(key_name).replace("_", " ").strip()
+
+
+def get_readable_key_names(key_names):
+    return [get_readable_key_name(key_name) for key_name in key_names]
+
+
+def get_deleted_keys(response_payload, required_fields):
+    if not isinstance(response_payload, dict):
+        return []
+    required_set = set(required_fields)
+    return [key for key in response_payload.keys() if key not in required_set]
+
+
+def keep_only_required_fields(response_payload, required_fields):
+    if not isinstance(response_payload, dict):
+        return response_payload
+    required_set = set(required_fields)
+    return {key: value for key, value in response_payload.items() if key in required_set}
+
+
+def get_missing_fields_type_hints(missing_fields):
+    hints = []
+    for field_name in missing_fields:
+        if field_name.startswith("evidence_quotes_"):
+            hints.append(f'"{field_name}": array of short strings')
+        elif field_name.startswith("confidence_"):
+            hints.append(f'"{field_name}": float between 0.00 and 1.00')
+        elif field_name in {"anti_slavery_hero_score", "dueling_horror_score"}:
+            hints.append(f'"{field_name}": integer (0-3)')
+        else:
+            hints.append(f'"{field_name}": string')
+    return "\n".join(hints)
+
+
+def run_repair_prompt_call(
+    initial_response,
+    missing_fields,
+    repair_prompt_file_path,
+    repair_prompt_parameters,
+    locked_reference_fields,
+    model,
+    temperature,
+    system_message,
+    prompt_version,
+    metadata_key,
+):
+    readable_missing_fields = get_readable_key_names(missing_fields)
+    logger.warning(
+        f"Initial JSON response missing fields: {missing_fields} "
+        f"(readable: {readable_missing_fields}). Running repair call."
+    )
+    repair_prompt_parameters = repair_prompt_parameters or {}
+    repair_parameters = dict(repair_prompt_parameters)
+    if locked_reference_fields:
+        locked_fields = {
+            key: initial_response.get(key)
+            for key in locked_reference_fields
+            if key in initial_response and key not in set(missing_fields)
+        }
+        repair_parameters["locked_reference_json"] = json.dumps(locked_fields, ensure_ascii=False)
+    repair_parameters["missing_fields_json"] = json.dumps(missing_fields, ensure_ascii=False)
+    repair_parameters["type_hints_text"] = get_missing_fields_type_hints(missing_fields)
+    repair_parameters["partial_payload_json"] = json.dumps(initial_response, ensure_ascii=False)
+
+    success, repair_payload, error = call_openai_with_json_prompt_file(
+        prompt_file_path=repair_prompt_file_path,
+        prompt_parameters=repair_parameters,
+        model=model,
+        temperature=temperature,
+        system_message=system_message,
+        include_response_metadata=True,
+        prompt_version=prompt_version,
+        metadata_key=metadata_key,
+    )
+    if not success:
+        return False, None, None, error
+
+    repair_response = repair_payload["response"]
+    repair_call_metadata = repair_payload[metadata_key]
+    if not isinstance(repair_response, dict):
+        return False, None, None, "Repair response is not a JSON object."
+    unexpected_keys = [key for key in repair_response.keys() if key not in set(missing_fields)]
+    if unexpected_keys:
+        return False, None, None, f"Repair response returned unexpected keys: {unexpected_keys}"
+
+    repair_metadata = {
+        "repair_used": True,
+        "repair_prompt_file_name": repair_call_metadata.get("prompt_file_name", ""),
+        "repair_prompt_version": repair_call_metadata.get("prompt_version", ""),
+        "repair_missing_fields": missing_fields,
+        "repair_missing_fields_readable": readable_missing_fields,
+    }
+    return True, repair_response, repair_metadata, None
+
+
+def call_openai_with_json_prompt_file_with_repair(
+    prompt_file_path,
+    repair_prompt_file_path,
+    required_fields,
+    prompt_parameters=None,
+    repair_prompt_parameters=None,
+    locked_reference_fields=None,
+    model=DEFAULT_MODEL,
+    temperature=0.1,
+    system_message=None,
+    include_response_metadata=False,
+    prompt_version=None,
+    metadata_key="llm_metadata",
+):
+    success, initial_payload, error = call_openai_with_json_prompt_file(
+        prompt_file_path=prompt_file_path,
+        prompt_parameters=prompt_parameters,
+        model=model,
+        temperature=temperature,
+        system_message=system_message,
+        include_response_metadata=True,
+        prompt_version=prompt_version,
+        metadata_key=metadata_key,
+    )
+    if not success:
+        return False, None, error
+
+    initial_response_raw = initial_payload["response"]
+    initial_metadata = initial_payload[metadata_key]
+    deleted_keys = get_deleted_keys(initial_response_raw, required_fields)
+    deleted_keys_readable = get_readable_key_names(deleted_keys)
+    initial_response = keep_only_required_fields(initial_response_raw, required_fields)
+    if deleted_keys:
+        logger.warning(
+            f"Initial JSON response included extra keys that were deleted: {deleted_keys} "
+            f"(readable: {deleted_keys_readable})"
+        )
+    missing_fields = get_missing_required_fields(initial_response, required_fields)
+    repaired_response = initial_response
+    repair_metadata = {
+        "repair_used": False,
+        "repair_prompt_file_name": "",
+        "repair_prompt_version": "",
+        "repair_missing_fields": [],
+        "repair_missing_fields_readable": [],
+        "deleted_keys": deleted_keys,
+        "deleted_keys_readable": deleted_keys_readable,
+    }
+
+    if missing_fields:
+        success, repair_response, repair_metadata, error = run_repair_prompt_call(
+            initial_response=initial_response,
+            missing_fields=missing_fields,
+            repair_prompt_file_path=repair_prompt_file_path,
+            repair_prompt_parameters=repair_prompt_parameters,
+            locked_reference_fields=locked_reference_fields,
+            model=model,
+            temperature=temperature,
+            system_message=system_message,
+            prompt_version=prompt_version,
+            metadata_key=metadata_key,
+        )
+        if not success:
+            return False, None, error
+        repaired_response = {**initial_response, **repair_response}
+
+    remaining_missing_fields = get_missing_required_fields(repaired_response, required_fields)
+    if remaining_missing_fields:
+        return False, None, f"Response still missing required fields after repair: {remaining_missing_fields}"
+
+    if not include_response_metadata:
+        return True, repaired_response, None
+
+    merged_metadata = dict(initial_metadata)
+    merged_metadata.update(repair_metadata)
+    wrapped_payload = wrap_response_with_metadata(
+        response_payload=repaired_response,
+        metadata=merged_metadata,
         metadata_key=metadata_key,
     )
     return True, wrapped_payload, None

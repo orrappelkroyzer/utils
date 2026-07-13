@@ -17,9 +17,55 @@ def get_logger(s):
 DATE = 'date'
 DATETIME = 'datetime'
 
+
+def parse_timestamp_utc(value):
+    parsed = pd.to_datetime(value, errors="coerce", utc=True)
+    if pd.isna(parsed):
+        return None
+    return parsed
+
+
+def get_earliest_timestamp_utc(df: pd.DataFrame, time_column: str):
+    if time_column not in df.columns:
+        return None
+    parsed_series = pd.to_datetime(df[time_column], errors="coerce", utc=True).dropna()
+    if parsed_series.empty:
+        return None
+    return parsed_series.min()
+
+
+def is_path_newer_than_timestamp(path: Path, processed_time):
+    if processed_time is None:
+        return False
+    input_mtime = pd.Timestamp(path.stat().st_mtime, unit="s", tz="UTC")
+    return input_mtime > processed_time
+
+
 def get_decade_str(year: int) -> str:
     """Convert a year to its decade string (e.g., 2023 -> '2020')."""
     return str(year // 10 * 10)
+
+
+def normalize_text_value(value, lowercase: bool = True) -> str:
+    if value is None:
+        return ""
+    if pd.isna(value):
+        return ""
+    text = str(value).strip()
+    if text.lower() in {"nan", "none", "null"}:
+        return ""
+    if lowercase:
+        text = text.lower()
+    return text
+
+
+def normalize_for_filename(value) -> str:
+    normalized_text = normalize_text_value(value=value, lowercase=True)
+    safe = "".join(ch if ch.isalnum() else "_" for ch in normalized_text)
+    while "__" in safe:
+        safe = safe.replace("__", "_")
+    return safe.strip("_")
+
 
 def load_config(config_path: Union[Path, str] = Path("config.json"), output_dir_suffix: str = None, add_date: str = DATE) -> dict:
     with open(config_path, encoding='utf-8') as f:
