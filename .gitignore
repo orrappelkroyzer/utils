@@ -29,3 +29,6 @@ llm/__pycache__/llm_utils.cpython-313.pyc
 __pycache__/lock.cpython-313.pyc
 __pycache__/scraping_utils.cpython-313.pyc
 __pycache__/file_handler_utils.cpython-313.pyc
+
+__pycache__/
+*.py[cod]
