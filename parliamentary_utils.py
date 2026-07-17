@@ -126,6 +126,46 @@ def build_enactment_path_package_labels(
     return enactment_path
 
 
+def build_enactment_vote_package_label_pairs(
+    issue_vote_dates,
+    issue_vote_results,
+    issue_event_statuses,
+    issue_item_numbers=None,
+    issue_vote_observation_types=None,
+):
+    issue_count = len(issue_vote_dates)
+    if issue_item_numbers is None:
+        issue_item_numbers = list(range(1, issue_count + 1))
+    issue_order = sorted(
+        range(issue_count),
+        key=lambda issue_index: get_issue_sort_key(
+            issue_index,
+            issue_vote_dates[issue_index],
+            issue_item_numbers[issue_index],
+        ),
+    )
+    enacted_indices = set()
+    vote_package_label_pairs = []
+    for issue_index in issue_order:
+        if (
+            issue_vote_observation_types is not None
+            and str(issue_vote_observation_types[issue_index]).lower().startswith(
+                "counterfactual"
+            )
+        ):
+            continue
+        source_label = get_package_label_from_issue_indices(enacted_indices)
+        proposed_indices = enacted_indices | {issue_index}
+        target_label = get_package_label_from_issue_indices(proposed_indices)
+        vote_package_label_pairs.append([source_label, target_label])
+        if is_issue_enacted(
+            issue_vote_results[issue_index],
+            issue_event_statuses[issue_index],
+        ):
+            enacted_indices.add(issue_index)
+    return vote_package_label_pairs
+
+
 def build_enactment_path_from_issue_rows(country_issues):
     issue_vote_dates = country_issues["vote_date"].tolist()
     issue_vote_results = country_issues["vote_result"].tolist()
@@ -136,6 +176,21 @@ def build_enactment_path_from_issue_rows(country_issues):
         issue_vote_results,
         issue_event_statuses,
         issue_item_numbers=issue_item_numbers,
+    )
+
+
+def build_enactment_vote_pairs_from_issue_rows(country_issues):
+    issue_vote_observation_types = None
+    if "vote_observation_type" in country_issues.columns:
+        issue_vote_observation_types = country_issues[
+            "vote_observation_type"
+        ].tolist()
+    return build_enactment_vote_package_label_pairs(
+        country_issues["vote_date"].tolist(),
+        country_issues["vote_result"].tolist(),
+        country_issues["event_status"].tolist(),
+        issue_item_numbers=country_issues["item_number_within_country"].tolist(),
+        issue_vote_observation_types=issue_vote_observation_types,
     )
 
 
@@ -181,8 +236,23 @@ def get_enactment_path_from_scenario_row(row):
         package_labels,
         enactment_path_package_labels,
     )
+    vote_edges = get_enactment_path_edges(enactment_path_node_indices)
+    if (
+        "enactment_vote_package_label_pairs_json" in row
+        and not pd.isna(row["enactment_vote_package_label_pairs_json"])
+    ):
+        vote_package_label_pairs = json.loads(
+            row["enactment_vote_package_label_pairs_json"],
+        )
+        vote_edges = [
+            tuple(
+                get_enactment_path_node_indices(package_labels, package_label_pair)
+            )
+            for package_label_pair in vote_package_label_pairs
+        ]
     return {
         "package_labels": enactment_path_package_labels,
         "node_indices": enactment_path_node_indices,
         "edges": get_enactment_path_edges(enactment_path_node_indices),
+        "vote_edges": vote_edges,
     }
