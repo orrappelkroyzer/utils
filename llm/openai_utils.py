@@ -24,6 +24,9 @@ config = load_config(add_date=False, config_path=Path(local_python_path)/ 'confi
 # Model name constants
 GPT_4O = "gpt-4o"
 GPT_4O_MINI = "gpt-4o-mini"
+GPT_5_6_LUNA = "gpt-5.6-luna"
+GPT_5_6_TERRA = "gpt-5.6-terra"
+GPT_5_6_SOL = "gpt-5.6-sol"
 GPT_5 = "gpt-5"
 GPT_5_5 = "gpt-5.5"
 GPT_5_MINI = "gpt-5-mini"
@@ -31,18 +34,11 @@ GPT_5_4 = "gpt-5.4"
 GPT_5_4_MINI = "gpt-5.4-mini"
 
 # Default model
-DEFAULT_MODEL = GPT_5_4_MINI
+DEFAULT_MODEL = GPT_5_6_TERRA
 
-# Define supported models and their capabilities
-SUPPORTED_MODELS = {
-    GPT_4O: {"supports_temperature": True},
-    GPT_4O_MINI: {"supports_temperature": True},
-    GPT_5: {"supports_temperature": False},
-    GPT_5_5: {"supports_temperature": False},
-    GPT_5_MINI: {"supports_temperature": False},
-    GPT_5_4: {"supports_temperature": False},
-    GPT_5_4_MINI: {"supports_temperature": False},
-}
+def model_supports_temperature(model: str) -> bool:
+    return model.lower().strip().startswith("gpt-4o")
+
 
 # Global client instance
 _client = None
@@ -102,7 +98,7 @@ def call_openai_api(messages, model=DEFAULT_MODEL, temperature=0.1, system_messa
             "model": candidate_model,
             "messages": messages,
         }
-        if SUPPORTED_MODELS.get(candidate_model, {}).get("supports_temperature", True):
+        if model_supports_temperature(candidate_model):
             api_params["temperature"] = temperature
 
         try:
@@ -376,7 +372,7 @@ def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1,
 
     for candidate_model in fallback_chain:
         api_params = {"model": candidate_model, "input": messages, "max_output_tokens": 16384}
-        if SUPPORTED_MODELS.get(candidate_model, {}).get("supports_temperature", True):
+        if model_supports_temperature(candidate_model):
             api_params["temperature"] = temperature
 
         try:
@@ -433,7 +429,7 @@ def call_openai_with_files(
     messages.append({"role": "user", "content": user_content})
 
     api_params = {"model": model, "input": messages, "max_output_tokens": 16384}
-    if SUPPORTED_MODELS.get(model, {}).get("supports_temperature", True):
+    if model_supports_temperature(model):
         api_params["temperature"] = temperature
     if tools:
         api_params["tools"] = tools
