@@ -6,11 +6,11 @@ if local_python_path not in sys.path:
 from utils.utils import load_config, get_logger
 logger = get_logger(__name__)
 config = load_config(Path(local_python_path) / "config.json") 
-import json
 import os
 import subprocess
 import tempfile
 
+from utils.file_handler_utils import read_json
 from matplotlib import cm
 from matplotlib import pyplot as plt
 import numpy as np
@@ -454,7 +454,7 @@ def kill_process_tree(process):
 
 def run_plotly_image_worker():
     figure_json_path = Path(os.environ[PLOTLY_WORKER_JSON_ENV])
-    figure = go.Figure(json.loads(figure_json_path.read_text(encoding="utf-8")))
+    figure = go.Figure(read_json(figure_json_path))
     fix_and_write(
         figure,
         os.environ[PLOTLY_WORKER_FILENAME_ENV],
