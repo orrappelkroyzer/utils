@@ -12,7 +12,7 @@ from anthropic import Anthropic, RateLimitError
 from pathlib import Path
 import sys
 
-local_python_path = str(Path(__file__).parents[1])
+local_python_path = str(Path(__file__).parents[2])
 if local_python_path not in sys.path:
     sys.path.append(local_python_path)
 from utils.utils import load_config, get_logger

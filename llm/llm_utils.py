@@ -130,7 +130,7 @@ def split_response_and_metadata(
 def upload_text_file(text: str, filename: str, provider: str) -> str:
     """Upload a text string as a file. Returns a file_id."""
     if provider == PROVIDER_CLAUDE:
-        from utils.claude_utils import upload_text_file as _upload
+        from utils.llm.claude_utils import upload_text_file as _upload
         return _upload(text, filename)
     else:
         import tempfile, os
@@ -147,7 +147,7 @@ def upload_text_file(text: str, filename: str, provider: str) -> str:
 def delete_file(file_id: str, provider: str):
     """Delete a previously uploaded file."""
     if provider == PROVIDER_CLAUDE:
-        from utils.claude_utils import delete_file as _delete
+        from utils.llm.claude_utils import delete_file as _delete
         _delete(file_id)
     else:
         from utils.llm.openai_utils import get_openai_client
@@ -170,7 +170,7 @@ def call_with_json_response(messages, provider: str, system_message=None, file_i
         Tuple of (success: bool, parsed_json: dict or None, error: str or None)
     """
     if provider == PROVIDER_CLAUDE:
-        from utils.claude_utils import call_claude_with_json_response, DEFAULT_MODEL
+        from utils.llm.claude_utils import call_claude_with_json_response, DEFAULT_MODEL
         return call_claude_with_json_response(
             messages=messages,
             model=DEFAULT_MODEL,
@@ -258,7 +258,7 @@ def call_with_json_prompt_file(
         )
 
     if provider == PROVIDER_CLAUDE:
-        from utils.claude_utils import (
+        from utils.llm.claude_utils import (
             call_claude_with_json_prompt_file,
             DEFAULT_MODEL as CLAUDE_DEFAULT_MODEL,
             DEFAULT_MAX_TOKENS as CLAUDE_DEFAULT_MAX_TOKENS,
