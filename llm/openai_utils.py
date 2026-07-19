@@ -506,6 +506,103 @@ def call_openai_with_files_json(
             logger.error(f"Failed to parse JSON: {e2}\nRaw: {content}")
             return False, None, f"JSON parsing failed: {e2}"
 
+
+def delete_openai_file(file_id: str) -> None:
+    """Delete an uploaded OpenAI file."""
+    get_openai_client().files.delete(file_id)
+    logger.info(f"Deleted OpenAI file {file_id}")
+
+
+def get_skill_version(skill_file_path: Path) -> str:
+    """Return the Git-backed or content-hash version for a skill file."""
+    metadata = build_prompt_call_metadata(
+        prompt_file_path=skill_file_path,
+        model=DEFAULT_MODEL,
+    )
+    return metadata["prompt_version"]
+
+
+def build_skill_call_metadata(
+    skill_file_path: Path,
+    requested_model: str,
+    response,
+) -> dict:
+    """Build reproducibility metadata for a skill-based Responses API call."""
+    skill_metadata = build_prompt_call_metadata(
+        prompt_file_path=skill_file_path,
+        model=requested_model,
+    )
+    return {
+        "skill_file_name": skill_metadata["prompt_file_name"],
+        "skill_version": skill_metadata["prompt_version"],
+        "skill_git_commit": skill_metadata.get("prompt_git_commit"),
+        "skill_git_blob": skill_metadata.get("prompt_git_blob"),
+        "skill_git_path": skill_metadata.get("prompt_git_path"),
+        "skill_git_is_dirty": skill_metadata.get("prompt_git_is_dirty"),
+        "model_requested": requested_model,
+        "model_used": getattr(response, "model", None) or requested_model,
+        "response_id": getattr(response, "id", None),
+    }
+
+
+def call_openai_skill_with_files_json(
+    file_ids: list[str],
+    prompt: str,
+    skill_file_path: Path,
+    model: str = DEFAULT_MODEL,
+    temperature: float = 0.1,
+    response_schema: dict | None = None,
+):
+    """
+    Run one Responses API request over a skill plus input files.
+
+    Returns:
+        Tuple of (success, parsed_json, call_metadata, error).
+    """
+    client = get_openai_client()
+    content = [{"type": "input_file", "file_id": file_id} for file_id in file_ids]
+    content.append({"type": "input_text", "text": prompt})
+    api_params = {
+        "model": model,
+        "input": [{"role": "user", "content": content}],
+        "max_output_tokens": 16384,
+    }
+    if model_supports_temperature(model):
+        api_params["temperature"] = temperature
+    if response_schema is not None:
+        api_params["text"] = {
+            "format": {
+                "type": "json_schema",
+                "name": "skill_response",
+                "schema": response_schema,
+                "strict": False,
+            }
+        }
+
+    try:
+        logger.info(f"Calling skill with model {model} and files {file_ids}")
+        start_time = time.time()
+        response = client.responses.create(**api_params)
+        elapsed = time.time() - start_time
+        logger.info(f"Skill response took {round(elapsed)} seconds")
+        if getattr(response, "status", None) == "incomplete":
+            logger.warning(
+                f"Skill response was incomplete: {getattr(response, 'incomplete_details', None)}"
+            )
+        parsed_json, parse_error = parse_json_response_content(response.output_text)
+        if parsed_json is None:
+            return False, None, None, f"JSON parsing failed: {parse_error}"
+        metadata = build_skill_call_metadata(
+            skill_file_path=Path(skill_file_path),
+            requested_model=model,
+            response=response,
+        )
+        return True, parsed_json, metadata, None
+    except Exception as error:
+        logger.error(f"OpenAI skill API call failed: {error}")
+        return False, None, None, str(error)
+
+
 def call_openai_with_json_prompt_file(
     prompt_file_path,
     file_ids=None,
