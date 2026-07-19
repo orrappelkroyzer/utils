@@ -42,12 +42,45 @@ def model_supports_temperature(model: str) -> bool:
 
 # Global client instance
 _client = None
+MAX_PERMISSION_RETRIES = 3
+PERMISSION_RETRY_BASE_SECONDS = 5
 
 
 def is_insufficient_quota_error(error):
     """Check whether an API exception indicates quota exhaustion."""
     msg = str(error).lower()
     return "insufficient_quota" in msg or "exceeded your current quota" in msg
+
+
+def is_insufficient_permissions_error(error) -> bool:
+    """Check whether an API exception reports an authorization failure."""
+    message = str(error).lower()
+    return (
+        "insufficient permissions" in message
+        or "error code: 401" in message
+        or "status code: 401" in message
+    )
+
+
+def call_with_permission_retries(request_call, request_label: str):
+    """
+    Retry temporary OpenAI permission denials with exponential backoff.
+
+    Persistent authorization failures are re-raised after the final attempt.
+    """
+    for attempt in range(1, MAX_PERMISSION_RETRIES + 1):
+        try:
+            return request_call()
+        except Exception as error:
+            is_final_attempt = attempt == MAX_PERMISSION_RETRIES
+            if not is_insufficient_permissions_error(error) or is_final_attempt:
+                raise
+            delay_seconds = PERMISSION_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+            logger.warning(
+                f"{request_label} received a 401 permission denial; retrying "
+                f"attempt {attempt + 1}/{MAX_PERMISSION_RETRIES} in {delay_seconds}s."
+            )
+            time.sleep(delay_seconds)
 
 
 def fallback_models_for(model):
@@ -104,7 +137,10 @@ def call_openai_api(messages, model=DEFAULT_MODEL, temperature=0.1, system_messa
         try:
             logger.info(f"Calling {candidate_model} for API request")
             start_time = time.time()
-            response = client.chat.completions.create(**api_params)
+            response = call_with_permission_retries(
+                request_call=lambda: client.chat.completions.create(**api_params),
+                request_label=f"OpenAI chat request for {candidate_model}",
+            )
 
             # Parse the response
             response_content = response.choices[0].message.content.strip()
@@ -378,7 +414,10 @@ def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1,
         try:
             logger.info(f"Calling {candidate_model} with file {file_id}")
             start_time = time.time()
-            response = client.responses.create(**api_params)
+            response = call_with_permission_retries(
+                request_call=lambda: client.responses.create(**api_params),
+                request_label=f"OpenAI file request for {candidate_model}",
+            )
             response_content = response.output_text.strip()
             elapsed = time.time() - start_time
             if elapsed > 60:
@@ -437,7 +476,10 @@ def call_openai_with_files(
     try:
         logger.info(f"Calling {model} with files {file_ids}")
         start_time = time.time()
-        response = client.responses.create(**api_params)
+        response = call_with_permission_retries(
+            request_call=lambda: client.responses.create(**api_params),
+            request_label=f"OpenAI multi-file request for {model}",
+        )
         response_content = response.output_text.strip()
         elapsed = time.time() - start_time
         if elapsed > 60:
@@ -582,7 +624,10 @@ def call_openai_skill_with_files_json(
     try:
         logger.info(f"Calling skill with model {model} and files {file_ids}")
         start_time = time.time()
-        response = client.responses.create(**api_params)
+        response = call_with_permission_retries(
+            request_call=lambda: client.responses.create(**api_params),
+            request_label=f"OpenAI skill request for {model}",
+        )
         elapsed = time.time() - start_time
         logger.info(f"Skill response took {round(elapsed)} seconds")
         if getattr(response, "status", None) == "incomplete":
