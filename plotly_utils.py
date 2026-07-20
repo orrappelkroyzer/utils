@@ -6,127 +6,125 @@ if local_python_path not in sys.path:
 from utils.utils import load_config, get_logger
 logger = get_logger(__name__)
 config = load_config(Path(local_python_path) / "config.json") 
+import os
+import subprocess
+import tempfile
+
+from utils.file_handler_utils import read_json
 from matplotlib import cm
 from matplotlib import pyplot as plt
 import numpy as np
+import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import pandas as pd
-
-from openpyxl import load_workbook
 
 import plotly.express as px
+from utils.file_handler_utils import (
+    APPEND_SHEET,
+    OVERWRITE_FILE,
+    OVERWRITE_SHEET,
+    read_excel,
+    read_json,
+    write_excel,
+    write_json,
+)
+
 IMAGE = 'image'
 HTML = 'html'
-font_size = config.get('font_size', 28)
-
-def write_csv(df, filename, output_dir=None, index=False):
-    if output_dir is None:
-        output_dir = config['output_dir']
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    fn = output_dir / "{}.csv".format(filename)
-    logger.info("Writing csv to {}".format(fn))
-    df.to_csv(fn, index=index)
-
-OVERWRITE_FILE = 'overwrite_file'
-OVERWRITE_SHEET = 'overwrite_sheet'
-APPEND_SHEET = 'append_sheet'
-
-def write_excel(df, filename, output_dir=None, sheet_name='Sheet1', index=False, override_mode=OVERWRITE_FILE):
-    if output_dir is None:
-        output_dir = config['output_dir']
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    fn = output_dir / "{}.xlsx".format(filename)
-    logger.info(f"Writing excel to sheet {sheet_name} in file {fn}")
-    if not fn.exists() or override_mode == OVERWRITE_FILE:
-        df.to_excel(fn, sheet_name=sheet_name, index=index)
-        return
-    # File exists and override is False
-    if override_mode == OVERWRITE_SHEET:
-        # Try pandas native sheet replace first
-        try:
-            with pd.ExcelWriter(fn, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:  # type: ignore
-                df.to_excel(writer, sheet_name=sheet_name, index=index)
-            return
-        except TypeError:
-            # Fallback for older pandas: manually delete sheet then append
-            try:
-                wb = load_workbook(fn)
-                if sheet_name in wb.sheetnames:
-                    ws = wb[sheet_name]
-                    wb.remove(ws)
-                    wb.save(fn)
-            except Exception as e:
-                logger.warning(f"Failed to remove existing sheet '{sheet_name}' from {fn}: {e}")
-            # Now append the new sheet
-            with pd.ExcelWriter(fn, engine='openpyxl', mode='a') as writer:
-                df.to_excel(writer, sheet_name=sheet_name, index=index)
-            return
-    elif override_mode == APPEND_SHEET:
-        with pd.ExcelWriter(fn, engine='openpyxl', mode='a') as writer:
-            df.to_excel(writer, sheet_name=sheet_name, index=index)
-            return
-    else:
-        raise AssertionError(f"received illegal override_mode {override_mode}")
+DEFAULT_FONT_SIZE = config.get('font_size', 36)
+PLOTLY_IMAGE_TIMEOUT_SECONDS = 90
+PLOTLY_WORKER_JSON_ENV = "PLOTLY_UTILS_WORKER_JSON"
+PLOTLY_WORKER_FILENAME_ENV = "PLOTLY_UTILS_WORKER_FILENAME"
+PLOTLY_WORKER_OUTPUT_DIR_ENV = "PLOTLY_UTILS_WORKER_OUTPUT_DIR"
+PLOTLY_WORKER_WIDTH_FACTOR_ENV = "PLOTLY_UTILS_WORKER_WIDTH_FACTOR"
+PLOTLY_WORKER_HEIGHT_FACTOR_ENV = "PLOTLY_UTILS_WORKER_HEIGHT_FACTOR"
 
 
-def fix_and_write(fig,
-                  filename,
-                  traces = None,
-                  layout_params = {},
-                  output_dir = None,
-                  width_factor = 1,
-                  height_factor = 1,
-                  xaxes={},
-                  yaxes={},
-                  anotations={},
-                  output_type = IMAGE,
-                  font_size = font_size):
-    width = config.get('width', 1920) * width_factor
-    height = config.get('height', 1280) * height_factor
-    if traces is not None:
-        fig.update_traces(**traces)
+def apply_layout(fig, layout_params, font_size):
+    """Apply layout parameters including title, base font size, legend and colorbar."""
+    if layout_params is None:
+        layout_params = {}
+
+    # Center title and apply font size if no explicit title supplied
     if 'title' not in layout_params:
-         layout_params['title']={'x':0.5,
-                                  'font_size' : font_size,
-                                 'xanchor': 'center'}
-    # if 'legend' not in layout_params:
-    #     layout_params['legend'] = dict(
-    #         # title_font_family='Courier New',
-    #         font=dict(
-    #             size=40
-    #         )
-    #     )
+        layout_params['title'] = {
+            'x': 0.5,
+            'font': {'size': font_size},
+            'xanchor': 'center'
+        }
+
+    # Ensure the default layout font uses this size and set legend/colorbar defaults
+    base_font = layout_params.get('font', {})
+    layout_params['font'] = {
+        'size': base_font.get('size', font_size),
+        **{k: v for k, v in base_font.items() if k != 'size'}
+    }
+
+    # Merge or create legend settings
+    legend_cfg = layout_params.get('legend', {})
+    legend_font = legend_cfg.get('font', {})
+    legend_cfg['font'] = {
+        'size': legend_font.get('size', font_size),
+        **{k: v for k, v in legend_font.items() if k != 'size'}
+    }
+    layout_params['legend'] = legend_cfg
+
+    # Merge or create coloraxis_colorbar settings
+    cab_cfg = layout_params.get('coloraxis_colorbar', {})
+    cab_title = cab_cfg.get('title', {})
+    cab_title_font = cab_title.get('font', {})
+    cab_title['font'] = {
+        'size': cab_title_font.get('size', font_size),
+        **{k: v for k, v in cab_title_font.items() if k != 'size'}
+    }
+    cab_cfg['title'] = cab_title
+
+    cab_tickfont = cab_cfg.get('tickfont', {})
+    cab_cfg['tickfont'] = {
+        'size': cab_tickfont.get('size', font_size),
+        **{k: v for k, v in cab_tickfont.items() if k != 'size'}
+    }
+    layout_params['coloraxis_colorbar'] = cab_cfg
+
     fig.update_layout(**layout_params)
+    return layout_params
+
+
+def apply_axes(fig, xaxes, yaxes, font_size):
+    """Apply x/y axis parameters including tick and title fonts."""
+    if xaxes is None:
+        xaxes = {}
+    if yaxes is None:
+        yaxes = {}
 
     t = dict(tickfont={'size': font_size}, title_font={'size': font_size})
     t.update(xaxes)
     fig.update_xaxes(**t)
+
     t = dict(tickfont={'size': font_size}, title_font={'size': font_size})
     t.update(yaxes)
     fig.update_yaxes(**t)
-    t = dict(font_size=font_size)
-    t.update(anotations)
-    fig.update_annotations(**anotations)
-
-    fig.update_layout(
-        coloraxis_colorbar=dict(
-            title=dict(font=dict(size=font_size)),  # Enlarge the colorbar title font
-            tickfont=dict(size=font_size)           # Enlarge the colorbar tick labels font
-        ),
-        legend=dict(
-           font=dict(size=font_size)  # Set the font size for the legend
-        )
-    )
 
 
+def apply_annotations(fig, anotations, font_size):
+    """Apply annotations / subplot titles font settings."""
+    if anotations is None:
+        anotations = {}
+    ann_kwargs = dict(font=dict(size=font_size))
+    ann_kwargs.update(anotations)
+    fig.update_annotations(**ann_kwargs)
+
+
+def write_output(fig, filename, output_dir, output_type, width, height):
+    """Write figure to disk as image or HTML."""
     if output_dir is None:
         output_dir = config['output_dir']
+
     if output_type == IMAGE:
         fn = output_dir / "{}.png".format(filename)
         func = fig.write_image
-        kw_args = dict(height=height, width=width,  engine="orca")#dict(scale = width_in_mm * 17780.0)
+#        kw_args = dict(height=height, width=width, engine="orca")
+        kw_args = dict(height=height, width=width, engine="kaleido")
+        kw_args = dict(height=height, width=width)
     elif output_type == HTML:
         fn = output_dir / "{}.html".format(filename)
         func = fig.write_html
@@ -138,6 +136,191 @@ def fix_and_write(fig,
     fn.unlink(missing_ok=True)
     fn.parents[0].mkdir(parents=True, exist_ok=True)
     func(fn, **kw_args)
+
+def fix_and_write(fig,
+                  filename,
+                  traces=None,
+                  layout_params=None,
+                  output_dir=None,
+                  width_factor=1,
+                  height_factor=1,
+                  xaxes=None,
+                  yaxes=None,
+                  anotations=None,
+                  output_type=IMAGE,
+                  font_size=None):
+    """
+    Fix common layout aspects of a Plotly figure and write it to disk.
+
+    Parameters
+    ----------
+    fig : plotly.graph_objects.Figure
+        The figure to modify and save.
+    filename : str
+        Base filename (without extension).
+    traces : dict, optional
+        Passed to fig.update_traces(**traces).
+    layout_params : dict, optional
+        Passed to fig.update_layout(**layout_params).
+    output_dir : Path or str, optional
+        Directory to write the file into. Defaults to config['output_dir'].
+    width_factor, height_factor : float, optional
+        Multipliers for base width/height from config.
+    xaxes, yaxes : dict, optional
+        Extra parameters for fig.update_xaxes / fig.update_yaxes.
+    anotations : dict, optional
+        Extra parameters for fig.update_annotations.
+    output_type : {'image', 'html'}
+        Output format.
+    font_size : int, optional
+        Font size to apply to all text in the figure (axes, titles,
+        annotations, legend, colorbar, and layout default font). If None,
+        falls back to DEFAULT_FONT_SIZE from config.
+    """
+    if font_size is None:
+        font_size = DEFAULT_FONT_SIZE
+    width = config.get('width', 1920) * width_factor
+    height = config.get('height', 1280) * height_factor
+    if traces is not None:
+        fig.update_traces(**traces)
+
+    # Layout and text handling
+    layout_params = apply_layout(fig, layout_params, font_size)
+    apply_axes(fig, xaxes, yaxes, font_size)
+    apply_annotations(fig, anotations, font_size)
+
+    # Finally, write to disk
+    write_output(fig, filename, output_dir, output_type, width, height)
+
+_SWATCH_W = 0.04
+_SWATCH_H = 0.03
+_LABEL_GAP = 0.008
+_ENTRY_GAP = 0.04
+_CHAR_W = 0.011
+
+def make_custom_legend(fig, entries, y=-0.22, font_size=28,
+                       swatch_w=_SWATCH_W, swatch_h=_SWATCH_H,
+                       axis_start=10):
+    """Add patterned swatches and labels to *fig* as a hand-drawn legend.
+
+    Parameters
+    ----------
+    fig : plotly.graph_objects.Figure
+    entries : list of (label, color, pattern_shape) tuples.
+        pattern_shape can be "" or None for a solid swatch.
+    y : float
+        Vertical centre of the legend row in paper coordinates.
+    font_size : int
+    swatch_w, swatch_h : float
+        Width and height of each swatch in paper coordinates.
+    axis_start : int
+        First axis index to use for hidden swatch axes (e.g. 10 → xaxis10).
+        Must not collide with axes already on the figure.
+    """
+    entry_widths = [swatch_w + _LABEL_GAP + len(label) * _CHAR_W
+                    for label, *_ in entries]
+    total_w = sum(entry_widths) + (len(entries) - 1) * _ENTRY_GAP
+    cx = 0.5 - total_w / 2
+
+    annotations = []
+    for i, (entry, ew) in enumerate(zip(entries, entry_widths)):
+        label, color = entry[0], entry[1]
+        pattern = entry[2] if len(entry) > 2 else ""
+
+        ax_idx = axis_start + i
+        x_key = f"xaxis{ax_idx}"
+        y_key = f"yaxis{ax_idx}"
+        xref = f"x{ax_idx}"
+        yref = f"y{ax_idx}"
+
+        fig.update_layout(**{
+            x_key: dict(
+                domain=[cx, cx + swatch_w],
+                visible=False, fixedrange=True,
+            ),
+            y_key: dict(
+                domain=[y, y + swatch_h],
+                visible=False, fixedrange=True,
+                anchor=xref,
+            ),
+        })
+
+        fig.add_trace(go.Bar(
+            x=["s"], y=[1],
+            marker=dict(
+                color=color,
+                pattern_shape=pattern or "",
+                pattern_solidity=0.5,
+                line=dict(color="black", width=1),
+            ),
+            showlegend=False,
+            xaxis=xref,
+            yaxis=yref,
+        ))
+
+        annotations.append(dict(
+            xref="paper", yref="paper",
+            x=cx + swatch_w + _LABEL_GAP,
+            y=y + swatch_h / 2,
+            text=label,
+            showarrow=False,
+            xanchor="left",
+            yanchor="middle",
+            font=dict(size=font_size),
+        ))
+        cx += ew + _ENTRY_GAP
+
+    existing = list(fig.layout.annotations or [])
+    fig.update_layout(annotations=existing + annotations)
+
+
+_LINE_SWATCH_W = 0.06
+
+def make_custom_line_legend(fig, entries, y=0.02, font_size=24):
+    """Add line swatches and labels to *fig* as a hand-drawn legend.
+
+    Parameters
+    ----------
+    fig : plotly.graph_objects.Figure
+    entries : list of (label, color, dash) tuples.
+        dash is a plotly dash string: "solid", "dash", "dot", "dashdot", etc.
+    y : float
+        Vertical centre of the legend row in paper coordinates (must be in [0, 1]).
+    font_size : int
+    """
+    entry_widths = [_LINE_SWATCH_W + _LABEL_GAP + len(label) * _CHAR_W
+                    for label, *_ in entries]
+    total_w = sum(entry_widths) + (len(entries) - 1) * _ENTRY_GAP
+    cx = 0.5 - total_w / 2
+
+    shapes = list(fig.layout.shapes or [])
+    annotations = []
+    for (entry, ew) in zip(entries, entry_widths):
+        label, color = entry[0], entry[1]
+        dash = entry[2] if len(entry) > 2 else "solid"
+
+        shapes.append(dict(
+            type="line",
+            xref="paper", yref="paper",
+            x0=cx, x1=cx + _LINE_SWATCH_W,
+            y0=y, y1=y,
+            line=dict(color=color, width=3, dash=dash),
+        ))
+        annotations.append(dict(
+            xref="paper", yref="paper",
+            x=cx + _LINE_SWATCH_W + _LABEL_GAP,
+            y=y,
+            text=label,
+            showarrow=False,
+            xanchor="left",
+            yanchor="middle",
+            font=dict(size=font_size),
+        ))
+        cx += ew + _ENTRY_GAP
+
+    existing_annots = list(fig.layout.annotations or [])
+    fig.update_layout(shapes=shapes, annotations=existing_annots + annotations)
+
 
 def combine_figures(figs_list):
 
@@ -227,3 +410,111 @@ tab20 = [[31, 119, 180],
     #     return ['rgb({})'.format(",".join([str(x) for x in y])) for y in colors], \
     #         ['rgba({},0.2)'.format(",".join([str(x) for x in y])) for y in colors]
     # return ['rgb({})'.format(",".join([str(x) for x in y])) for y in colors]
+
+
+def is_valid_plotly_png(output_dir, filename, previous_mtime_ns=None):
+    output_path = Path(output_dir) / f"{filename}.png"
+    if not output_path.exists() or output_path.stat().st_size <= 0:
+        return False
+    if previous_mtime_ns is None:
+        return True
+    return output_path.stat().st_mtime_ns != previous_mtime_ns
+
+
+def get_plotly_worker_environment(
+    figure_json_path,
+    filename,
+    output_dir,
+    width_factor,
+    height_factor,
+):
+    worker_environment = os.environ.copy()
+    worker_environment.update({
+        PLOTLY_WORKER_JSON_ENV: str(figure_json_path),
+        PLOTLY_WORKER_FILENAME_ENV: str(filename),
+        PLOTLY_WORKER_OUTPUT_DIR_ENV: str(output_dir),
+        PLOTLY_WORKER_WIDTH_FACTOR_ENV: str(width_factor),
+        PLOTLY_WORKER_HEIGHT_FACTOR_ENV: str(height_factor),
+    })
+    return worker_environment
+
+
+def kill_process_tree(process):
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    else:
+        process.kill()
+    process.wait()
+
+
+def run_plotly_image_worker():
+    figure_json_path = Path(os.environ[PLOTLY_WORKER_JSON_ENV])
+    figure = go.Figure(read_json(figure_json_path))
+    fix_and_write(
+        figure,
+        os.environ[PLOTLY_WORKER_FILENAME_ENV],
+        output_dir=Path(os.environ[PLOTLY_WORKER_OUTPUT_DIR_ENV]),
+        width_factor=float(os.environ[PLOTLY_WORKER_WIDTH_FACTOR_ENV]),
+        height_factor=float(os.environ[PLOTLY_WORKER_HEIGHT_FACTOR_ENV]),
+    )
+
+
+def write_plotly_image_with_timeout(
+    fig,
+    filename,
+    output_dir,
+    width_factor,
+    height_factor,
+    timeout_seconds=PLOTLY_IMAGE_TIMEOUT_SECONDS,
+):
+    output_path = Path(output_dir) / f"{filename}.png"
+    previous_mtime_ns = output_path.stat().st_mtime_ns if output_path.exists() else None
+    with tempfile.TemporaryDirectory() as temp_dir:
+        figure_json_path = Path(temp_dir) / "figure.json"
+        figure_json_path.write_text(fig.to_json(), encoding="utf-8")
+        worker_environment = get_plotly_worker_environment(
+            figure_json_path,
+            filename,
+            output_dir,
+            width_factor,
+            height_factor,
+        )
+        process = subprocess.Popen(
+            [sys.executable, "-m", "utils.plotly_utils"],
+            cwd=local_python_path,
+            env=worker_environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            logger.error(
+                f"Kaleido timed out after {timeout_seconds} seconds while writing "
+                f"{filename}.png; terminating its process tree"
+            )
+            kill_process_tree(process)
+            if is_valid_plotly_png(output_dir, filename, previous_mtime_ns):
+                logger.warning(
+                    f"Keeping {filename}.png because Kaleido completed the image before hanging"
+                )
+                return True
+            return False
+
+        if process.returncode == 0:
+            return True
+        logger.error(
+            f"Plotly image worker failed for {filename}.png with exit code "
+            f"{process.returncode}: {stderr.strip() or stdout.strip()}"
+        )
+        return is_valid_plotly_png(output_dir, filename, previous_mtime_ns)
+
+
+if __name__ == "__main__" and PLOTLY_WORKER_JSON_ENV in os.environ:
+    run_plotly_image_worker()
