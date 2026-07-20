@@ -44,6 +44,7 @@ def model_supports_temperature(model: str) -> bool:
 _client = None
 MAX_PERMISSION_RETRIES = 3
 PERMISSION_RETRY_BASE_SECONDS = 5
+MAX_JSON_RESPONSE_ATTEMPTS = 2
 
 
 def is_insufficient_quota_error(error):
@@ -195,28 +196,30 @@ def call_openai_with_json_response(messages, model=DEFAULT_MODEL, temperature=0.
     Returns:
         Tuple of (success: bool, parsed_json: dict or None, error: str or None)
     """
-    success, response_content, error = call_openai_api(messages, model, temperature, system_message)
-    
-    if not success:
-        return False, None, error
-    
-    parsed_json, parse_error = parse_json_response_content(response_content)
-    if parsed_json is not None:
-        return True, parsed_json, None
-
-    logger.warning(f"Initial JSON parsing failed, attempting repair: {parse_error}")
-    repaired_json, repair_error = repair_json_response_with_model(
-        response_content=response_content,
-        model=model,
-        temperature=temperature,
-    )
-    if repaired_json is not None:
-        return True, repaired_json, None
-
-    logger.error(f"Failed to parse JSON response: {parse_error}")
-    logger.error(f"Failed to repair JSON response: {repair_error}")
-    logger.error(f"Raw response: {response_content}")
-    return False, None, f"JSON parsing failed: {parse_error}; repair failed: {repair_error}"
+    last_error = None
+    for attempt in range(1, MAX_JSON_RESPONSE_ATTEMPTS + 1):
+        success, response_content, error = call_openai_api(
+            messages,
+            model,
+            temperature,
+            system_message,
+        )
+        if not success:
+            return False, None, error
+        parsed_json, parse_error = parse_or_repair_json_response(
+            response_content=response_content,
+            model=model,
+            temperature=temperature,
+        )
+        if parsed_json is not None:
+            return True, parsed_json, None
+        last_error = parse_error
+        if attempt < MAX_JSON_RESPONSE_ATTEMPTS:
+            logger.warning(
+                f"JSON parsing and repair failed; retrying original prompt "
+                f"attempt {attempt + 1}/{MAX_JSON_RESPONSE_ATTEMPTS}."
+            )
+    return False, None, f"JSON parsing failed after retry: {last_error}"
 
 
 def parse_json_response_content(response_content):
@@ -276,6 +279,23 @@ def repair_json_response_with_model(response_content, model=DEFAULT_MODEL, tempe
     if repaired_json is None:
         return None, parse_error
     return repaired_json, None
+
+
+def parse_or_repair_json_response(response_content, model, temperature):
+    """Parse JSON response content, then ask the model to repair it once."""
+    parsed_json, parse_error = parse_json_response_content(response_content)
+    if parsed_json is not None:
+        return parsed_json, None
+    logger.warning(f"JSON parsing failed, attempting repair: {parse_error}")
+    repaired_json, repair_error = repair_json_response_with_model(
+        response_content=response_content,
+        model=model,
+        temperature=temperature,
+    )
+    if repaired_json is not None:
+        return repaired_json, None
+    return None, f"{parse_error}; repair failed: {repair_error}"
+
 
 _MIME_BY_EXT = {
     ".pdf": "application/pdf",
@@ -527,26 +547,33 @@ def call_openai_with_files_json(
     system_message=None,
     tools=None,
 ):
-    """Call OpenAI with multiple files and parse JSON from the response."""
-    success, content, error = call_openai_with_files(
-        file_ids=file_ids,
-        prompt=prompt,
-        model=model,
-        temperature=temperature,
-        system_message=system_message,
-        tools=tools,
-    )
-    if not success:
-        return False, None, error
-    try:
-        return True, json.loads(content), None
-    except json.JSONDecodeError:
-        try:
-            fixed = fix_invalid_json_escapes(content)
-            return True, json.loads(fixed), None
-        except json.JSONDecodeError as e2:
-            logger.error(f"Failed to parse JSON: {e2}\nRaw: {content}")
-            return False, None, f"JSON parsing failed: {e2}"
+    """Call OpenAI with multiple files and retry malformed JSON responses."""
+    last_error = None
+    for attempt in range(1, MAX_JSON_RESPONSE_ATTEMPTS + 1):
+        success, content, error = call_openai_with_files(
+            file_ids=file_ids,
+            prompt=prompt,
+            model=model,
+            temperature=temperature,
+            system_message=system_message,
+            tools=tools,
+        )
+        if not success:
+            return False, None, error
+        parsed_json, parse_error = parse_or_repair_json_response(
+            response_content=content,
+            model=model,
+            temperature=temperature,
+        )
+        if parsed_json is not None:
+            return True, parsed_json, None
+        last_error = parse_error
+        if attempt < MAX_JSON_RESPONSE_ATTEMPTS:
+            logger.warning(
+                f"JSON parsing and repair failed; retrying original file prompt "
+                f"attempt {attempt + 1}/{MAX_JSON_RESPONSE_ATTEMPTS}."
+            )
+    return False, None, f"JSON parsing failed after retry: {last_error}"
 
 
 def delete_openai_file(file_id: str) -> None:
