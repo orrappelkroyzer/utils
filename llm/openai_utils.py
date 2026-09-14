@@ -21,24 +21,24 @@ from utils.llm.llm_utils import build_prompt_call_metadata, wrap_response_with_m
 logger = get_logger(__name__)
 config = load_config(add_date=False, config_path=Path(local_python_path)/ 'config.json')
 
-# Model name constants
-GPT_4O = "gpt-4o"
-GPT_4O_MINI = "gpt-4o-mini"
-GPT_5_6_LUNA = "gpt-5.6-luna"
-GPT_5_6_TERRA = "gpt-5.6-terra"
+# GPT-5.6 model tiers
 GPT_5_6_SOL = "gpt-5.6-sol"
-GPT_5 = "gpt-5"
-GPT_5_5 = "gpt-5.5"
-GPT_5_MINI = "gpt-5-mini"
-GPT_5_4 = "gpt-5.4"
-GPT_5_4_MINI = "gpt-5.4-mini"
+GPT_5_6_TERRA = "gpt-5.6-terra"
+GPT_5_6_LUNA = "gpt-5.6-luna"
 
 # Default model
 DEFAULT_MODEL = GPT_5_6_TERRA
 
-def model_supports_temperature(model: str) -> bool:
-    return model.lower().strip().startswith("gpt-4o")
+# Define supported models and their capabilities
+SUPPORTED_MODELS = {
+    GPT_5_6_SOL: {"supports_temperature": False},
+    GPT_5_6_TERRA: {"supports_temperature": False},
+    GPT_5_6_LUNA: {"supports_temperature": False},
+}
 
+
+def model_supports_temperature(model: str) -> bool:
+    return SUPPORTED_MODELS.get(model, {}).get("supports_temperature", False)
 
 # Global client instance
 _client = None
@@ -87,9 +87,9 @@ def call_with_permission_retries(request_call, request_label: str):
 def fallback_models_for(model):
     """Return model fallback chain in priority order (includes original)."""
     chains = {
-        GPT_5_5: [GPT_5_5, GPT_5_4, GPT_5_MINI, GPT_5_4_MINI, GPT_4O_MINI],
-        GPT_5_4: [GPT_5_4, GPT_5_MINI, GPT_5_4_MINI, GPT_4O_MINI],
-        GPT_5: [GPT_5, GPT_5_MINI, GPT_5_4_MINI, GPT_4O_MINI],
+        GPT_5_6_SOL: [GPT_5_6_SOL, GPT_5_6_TERRA, GPT_5_6_LUNA],
+        GPT_5_6_TERRA: [GPT_5_6_TERRA, GPT_5_6_LUNA],
+        GPT_5_6_LUNA: [GPT_5_6_LUNA],
     }
     return chains.get(model, [model])
 
