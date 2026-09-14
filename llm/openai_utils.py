@@ -19,7 +19,10 @@ if local_python_path not in sys.path:
 from utils.utils import load_config, get_logger
 from utils.llm.llm_utils import build_prompt_call_metadata, wrap_response_with_metadata
 logger = get_logger(__name__)
-config = load_config(add_date=False, config_path=Path(local_python_path)/ 'config.json')
+try:
+    config = load_config(add_date=False, config_path=Path(local_python_path) / "config.json")
+except FileNotFoundError:
+    config = {}
 
 # Model name constants
 GPT_4O = "gpt-4o"
@@ -44,6 +47,14 @@ def model_supports_temperature(model: str) -> bool:
 _client = None
 
 
+def set_openai_api_key(api_key: str):
+    """Set the process-local OpenAI client for the standalone application."""
+    global _client
+    if not api_key.strip():
+        raise ValueError("OpenAI API key cannot be empty.")
+    _client = OpenAI(api_key=api_key)
+
+
 def is_insufficient_quota_error(error):
     """Check whether an API exception indicates quota exhaustion."""
     msg = str(error).lower()
@@ -63,8 +74,10 @@ def get_openai_client():
     """Get or create OpenAI client instance."""
     global _client
     if _client is None:
-        config = load_config(add_date=False, config_path=Path(__file__).parents[2] / 'config.json')
-        _client = OpenAI(api_key=config['open_ai_key'])
+        api_key = config.get("open_ai_key")
+        if not api_key:
+            raise ValueError("OpenAI API key is not configured.")
+        _client = OpenAI(api_key=api_key)
     return _client
 
 def call_openai_api(messages, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
