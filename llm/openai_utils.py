@@ -24,27 +24,30 @@ try:
 except FileNotFoundError:
     config = {}
 
-# Model name constants
-GPT_4O = "gpt-4o"
-GPT_4O_MINI = "gpt-4o-mini"
-GPT_5_6_LUNA = "gpt-5.6-luna"
-GPT_5_6_TERRA = "gpt-5.6-terra"
+# GPT-5.6 model tiers
 GPT_5_6_SOL = "gpt-5.6-sol"
-GPT_5 = "gpt-5"
-GPT_5_5 = "gpt-5.5"
-GPT_5_MINI = "gpt-5-mini"
-GPT_5_4 = "gpt-5.4"
-GPT_5_4_MINI = "gpt-5.4-mini"
+GPT_5_6_TERRA = "gpt-5.6-terra"
+GPT_5_6_LUNA = "gpt-5.6-luna"
 
 # Default model
 DEFAULT_MODEL = GPT_5_6_TERRA
 
-def model_supports_temperature(model: str) -> bool:
-    return model.lower().strip().startswith("gpt-4o")
+# Define supported models and their capabilities
+SUPPORTED_MODELS = {
+    GPT_5_6_SOL: {"supports_temperature": False},
+    GPT_5_6_TERRA: {"supports_temperature": False},
+    GPT_5_6_LUNA: {"supports_temperature": False},
+}
 
+
+def model_supports_temperature(model: str) -> bool:
+    return SUPPORTED_MODELS.get(model, {}).get("supports_temperature", False)
 
 # Global client instance
 _client = None
+MAX_PERMISSION_RETRIES = 3
+PERMISSION_RETRY_BASE_SECONDS = 5
+MAX_JSON_RESPONSE_ATTEMPTS = 2
 
 
 def set_openai_api_key(api_key: str):
@@ -61,12 +64,43 @@ def is_insufficient_quota_error(error):
     return "insufficient_quota" in msg or "exceeded your current quota" in msg
 
 
+def is_insufficient_permissions_error(error) -> bool:
+    """Check whether an API exception reports an authorization failure."""
+    message = str(error).lower()
+    return (
+        "insufficient permissions" in message
+        or "error code: 401" in message
+        or "status code: 401" in message
+    )
+
+
+def call_with_permission_retries(request_call, request_label: str):
+    """
+    Retry temporary OpenAI permission denials with exponential backoff.
+
+    Persistent authorization failures are re-raised after the final attempt.
+    """
+    for attempt in range(1, MAX_PERMISSION_RETRIES + 1):
+        try:
+            return request_call()
+        except Exception as error:
+            is_final_attempt = attempt == MAX_PERMISSION_RETRIES
+            if not is_insufficient_permissions_error(error) or is_final_attempt:
+                raise
+            delay_seconds = PERMISSION_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+            logger.warning(
+                f"{request_label} received a 401 permission denial; retrying "
+                f"attempt {attempt + 1}/{MAX_PERMISSION_RETRIES} in {delay_seconds}s."
+            )
+            time.sleep(delay_seconds)
+
+
 def fallback_models_for(model):
     """Return model fallback chain in priority order (includes original)."""
     chains = {
-        GPT_5_5: [GPT_5_5, GPT_5_4, GPT_5_MINI, GPT_5_4_MINI, GPT_4O_MINI],
-        GPT_5_4: [GPT_5_4, GPT_5_MINI, GPT_5_4_MINI, GPT_4O_MINI],
-        GPT_5: [GPT_5, GPT_5_MINI, GPT_5_4_MINI, GPT_4O_MINI],
+        GPT_5_6_SOL: [GPT_5_6_SOL, GPT_5_6_TERRA, GPT_5_6_LUNA],
+        GPT_5_6_TERRA: [GPT_5_6_TERRA, GPT_5_6_LUNA],
+        GPT_5_6_LUNA: [GPT_5_6_LUNA],
     }
     return chains.get(model, [model])
 
@@ -117,7 +151,10 @@ def call_openai_api(messages, model=DEFAULT_MODEL, temperature=0.1, system_messa
         try:
             logger.info(f"Calling {candidate_model} for API request")
             start_time = time.time()
-            response = client.chat.completions.create(**api_params)
+            response = call_with_permission_retries(
+                request_call=lambda: client.chat.completions.create(**api_params),
+                request_label=f"OpenAI chat request for {candidate_model}",
+            )
 
             # Parse the response
             response_content = response.choices[0].message.content.strip()
@@ -172,28 +209,30 @@ def call_openai_with_json_response(messages, model=DEFAULT_MODEL, temperature=0.
     Returns:
         Tuple of (success: bool, parsed_json: dict or None, error: str or None)
     """
-    success, response_content, error = call_openai_api(messages, model, temperature, system_message)
-    
-    if not success:
-        return False, None, error
-    
-    parsed_json, parse_error = parse_json_response_content(response_content)
-    if parsed_json is not None:
-        return True, parsed_json, None
-
-    logger.warning(f"Initial JSON parsing failed, attempting repair: {parse_error}")
-    repaired_json, repair_error = repair_json_response_with_model(
-        response_content=response_content,
-        model=model,
-        temperature=temperature,
-    )
-    if repaired_json is not None:
-        return True, repaired_json, None
-
-    logger.error(f"Failed to parse JSON response: {parse_error}")
-    logger.error(f"Failed to repair JSON response: {repair_error}")
-    logger.error(f"Raw response: {response_content}")
-    return False, None, f"JSON parsing failed: {parse_error}; repair failed: {repair_error}"
+    last_error = None
+    for attempt in range(1, MAX_JSON_RESPONSE_ATTEMPTS + 1):
+        success, response_content, error = call_openai_api(
+            messages,
+            model,
+            temperature,
+            system_message,
+        )
+        if not success:
+            return False, None, error
+        parsed_json, parse_error = parse_or_repair_json_response(
+            response_content=response_content,
+            model=model,
+            temperature=temperature,
+        )
+        if parsed_json is not None:
+            return True, parsed_json, None
+        last_error = parse_error
+        if attempt < MAX_JSON_RESPONSE_ATTEMPTS:
+            logger.warning(
+                f"JSON parsing and repair failed; retrying original prompt "
+                f"attempt {attempt + 1}/{MAX_JSON_RESPONSE_ATTEMPTS}."
+            )
+    return False, None, f"JSON parsing failed after retry: {last_error}"
 
 
 def parse_json_response_content(response_content):
@@ -253,6 +292,23 @@ def repair_json_response_with_model(response_content, model=DEFAULT_MODEL, tempe
     if repaired_json is None:
         return None, parse_error
     return repaired_json, None
+
+
+def parse_or_repair_json_response(response_content, model, temperature):
+    """Parse JSON response content, then ask the model to repair it once."""
+    parsed_json, parse_error = parse_json_response_content(response_content)
+    if parsed_json is not None:
+        return parsed_json, None
+    logger.warning(f"JSON parsing failed, attempting repair: {parse_error}")
+    repaired_json, repair_error = repair_json_response_with_model(
+        response_content=response_content,
+        model=model,
+        temperature=temperature,
+    )
+    if repaired_json is not None:
+        return repaired_json, None
+    return None, f"{parse_error}; repair failed: {repair_error}"
+
 
 _MIME_BY_EXT = {
     ".pdf": "application/pdf",
@@ -391,7 +447,10 @@ def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1,
         try:
             logger.info(f"Calling {candidate_model} with file {file_id}")
             start_time = time.time()
-            response = client.responses.create(**api_params)
+            response = call_with_permission_retries(
+                request_call=lambda: client.responses.create(**api_params),
+                request_label=f"OpenAI file request for {candidate_model}",
+            )
             response_content = response.output_text.strip()
             elapsed = time.time() - start_time
             if elapsed > 60:
@@ -450,7 +509,10 @@ def call_openai_with_files(
     try:
         logger.info(f"Calling {model} with files {file_ids}")
         start_time = time.time()
-        response = client.responses.create(**api_params)
+        response = call_with_permission_retries(
+            request_call=lambda: client.responses.create(**api_params),
+            request_label=f"OpenAI multi-file request for {model}",
+        )
         response_content = response.output_text.strip()
         elapsed = time.time() - start_time
         if elapsed > 60:
@@ -498,26 +560,33 @@ def call_openai_with_files_json(
     system_message=None,
     tools=None,
 ):
-    """Call OpenAI with multiple files and parse JSON from the response."""
-    success, content, error = call_openai_with_files(
-        file_ids=file_ids,
-        prompt=prompt,
-        model=model,
-        temperature=temperature,
-        system_message=system_message,
-        tools=tools,
-    )
-    if not success:
-        return False, None, error
-    try:
-        return True, json.loads(content), None
-    except json.JSONDecodeError:
-        try:
-            fixed = fix_invalid_json_escapes(content)
-            return True, json.loads(fixed), None
-        except json.JSONDecodeError as e2:
-            logger.error(f"Failed to parse JSON: {e2}\nRaw: {content}")
-            return False, None, f"JSON parsing failed: {e2}"
+    """Call OpenAI with multiple files and retry malformed JSON responses."""
+    last_error = None
+    for attempt in range(1, MAX_JSON_RESPONSE_ATTEMPTS + 1):
+        success, content, error = call_openai_with_files(
+            file_ids=file_ids,
+            prompt=prompt,
+            model=model,
+            temperature=temperature,
+            system_message=system_message,
+            tools=tools,
+        )
+        if not success:
+            return False, None, error
+        parsed_json, parse_error = parse_or_repair_json_response(
+            response_content=content,
+            model=model,
+            temperature=temperature,
+        )
+        if parsed_json is not None:
+            return True, parsed_json, None
+        last_error = parse_error
+        if attempt < MAX_JSON_RESPONSE_ATTEMPTS:
+            logger.warning(
+                f"JSON parsing and repair failed; retrying original file prompt "
+                f"attempt {attempt + 1}/{MAX_JSON_RESPONSE_ATTEMPTS}."
+            )
+    return False, None, f"JSON parsing failed after retry: {last_error}"
 
 
 def delete_openai_file(file_id: str) -> None:
@@ -595,7 +664,10 @@ def call_openai_skill_with_files_json(
     try:
         logger.info(f"Calling skill with model {model} and files {file_ids}")
         start_time = time.time()
-        response = client.responses.create(**api_params)
+        response = call_with_permission_retries(
+            request_call=lambda: client.responses.create(**api_params),
+            request_label=f"OpenAI skill request for {model}",
+        )
         elapsed = time.time() - start_time
         logger.info(f"Skill response took {round(elapsed)} seconds")
         if getattr(response, "status", None) == "incomplete":
