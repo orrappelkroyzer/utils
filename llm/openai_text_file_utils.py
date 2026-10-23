@@ -7,8 +7,10 @@ from utils.llm.openai_utils import (
     call_openai_with_json_prompt_file,
     upload_file,
     get_openai_client,
-    SUPPORTED_MODELS,
     DEFAULT_MODEL,
+    model_supports_reasoning,
+    model_supports_temperature,
+    validate_reasoning_effort,
 )
 from utils.utils import get_logger
 
@@ -70,6 +72,8 @@ def call_prompt_on_text(
     temperature,
     response_field_name,
     prompt_parameters=None,
+    reasoning_effort=None,
+    response_field_aliases=None,
 ):
     parameters = dict(prompt_parameters or {})
     parameters[prompt_text_parameter_name] = text
@@ -78,14 +82,44 @@ def call_prompt_on_text(
         prompt_parameters=parameters,
         model=model,
         temperature=temperature,
+        reasoning_effort=reasoning_effort,
     )
     if not success:
         raise RuntimeError(error or "Unknown OpenAI error")
     if not isinstance(response_content, dict):
         raise RuntimeError("Expected JSON object response.")
+    response_content = normalize_response_field_aliases(
+        response_content=response_content,
+        response_field_aliases=response_field_aliases,
+    )
     if response_field_name not in response_content:
         raise RuntimeError(f"Response did not include '{response_field_name}' : {response_content.keys()}")
     return response_content
+
+
+def normalize_response_field_aliases(response_content, response_field_aliases):
+    normalized_response = dict(response_content)
+    for target_field, aliases in (response_field_aliases or {}).items():
+        if target_field in normalized_response:
+            continue
+        alias_names = [aliases] if isinstance(aliases, str) else list(aliases)
+        matching_aliases = [
+            alias_name
+            for alias_name in alias_names
+            if alias_name in normalized_response
+        ]
+        if len(matching_aliases) > 1:
+            raise RuntimeError(
+                f"Response contains multiple aliases for '{target_field}': "
+                f"{matching_aliases}"
+            )
+        if matching_aliases:
+            alias_name = matching_aliases[0]
+            normalized_response[target_field] = normalized_response[alias_name]
+            logger.warning(
+                f"Normalized response field '{alias_name}' to '{target_field}'."
+            )
+    return normalized_response
 
 
 def call_prompt_on_uploaded_file(
@@ -96,6 +130,8 @@ def call_prompt_on_uploaded_file(
     temperature,
     response_field_name,
     prompt_parameters=None,
+    reasoning_effort=None,
+    response_field_aliases=None,
 ):
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
     tmp.write(text)
@@ -110,6 +146,7 @@ def call_prompt_on_uploaded_file(
             prompt_parameters=prompt_parameters,
             model=model,
             temperature=temperature,
+            reasoning_effort=reasoning_effort,
         )
     finally:
         try:
@@ -119,6 +156,10 @@ def call_prompt_on_uploaded_file(
 
     if not isinstance(response_content, dict):
         raise RuntimeError("Expected JSON object response.")
+    response_content = normalize_response_field_aliases(
+        response_content=response_content,
+        response_field_aliases=response_field_aliases,
+    )
     if response_field_name not in response_content:
         raise RuntimeError(f"Response did not include '{response_field_name}' : {response_content.keys()}")
     return response_content
@@ -333,6 +374,7 @@ def call_prompt_with_uploaded_file_and_downloaded_output(
     prompt_parameters,
     model,
     temperature,
+    reasoning_effort=None,
 ):
     parameters = dict(prompt_parameters or {})
     if prompt_text_parameter_name and prompt_text_parameter_name not in parameters:
@@ -356,9 +398,14 @@ def call_prompt_with_uploaded_file_and_downloaded_output(
         "max_output_tokens": 16384,
         "store": True,
     }
-    if isinstance(model, str) and model.startswith("gpt-5"):
-        api_params["reasoning"] = {"effort": "minimal"}
-    if SUPPORTED_MODELS.get(model, {}).get("supports_temperature", True):
+    if model_supports_reasoning(model):
+        api_params["reasoning"] = {
+            "effort": validate_reasoning_effort(
+                reasoning_effort,
+                model=model,
+            )
+        }
+    if model_supports_temperature(model):
         api_params["temperature"] = temperature
 
     response = client.responses.create(**api_params)
@@ -407,9 +454,14 @@ def call_prompt_with_uploaded_file_and_downloaded_output(
                 "max_output_tokens": 16384,
                 "store": True,
             }
-            if isinstance(model, str) and model.startswith("gpt-5"):
-                retry_params["reasoning"] = {"effort": "minimal"}
-            if SUPPORTED_MODELS.get(model, {}).get("supports_temperature", True):
+            if model_supports_reasoning(model):
+                retry_params["reasoning"] = {
+                    "effort": validate_reasoning_effort(
+                        reasoning_effort,
+                        model=model,
+                    )
+                }
+            if model_supports_temperature(model):
                 retry_params["temperature"] = temperature
 
             retry_response = client.responses.create(**retry_params)
@@ -442,6 +494,8 @@ def process_text_with_prompt_file(
     temperature=0.1,
     max_chars_per_chunk=DEFAULT_MAX_CHARS_PER_CHUNK,
     prompt_parameters=None,
+    reasoning_effort=None,
+    response_field_aliases=None,
 ):
     text = text.strip()
     if not text:
@@ -462,6 +516,8 @@ def process_text_with_prompt_file(
             temperature=temperature,
             response_field_name=response_field_name,
             prompt_parameters=prompt_parameters,
+            reasoning_effort=reasoning_effort,
+            response_field_aliases=response_field_aliases,
         )
         return [raw_response]
 
@@ -473,6 +529,8 @@ def process_text_with_prompt_file(
         temperature=temperature,
         response_field_name=response_field_name,
         prompt_parameters=prompt_parameters,
+        reasoning_effort=reasoning_effort,
+        response_field_aliases=response_field_aliases,
     )
     return [raw_response]
 
@@ -489,6 +547,8 @@ def process_text_files_with_prompt_file(
     limit=None,
     max_chars_per_chunk=DEFAULT_MAX_CHARS_PER_CHUNK,
     prompt_parameters=None,
+    reasoning_effort=None,
+    response_field_aliases=None,
 ):
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
@@ -557,6 +617,8 @@ def process_text_files_with_prompt_file(
                 temperature=temperature,
                 max_chars_per_chunk=max_chars_per_chunk,
                 prompt_parameters=prompt_parameters,
+                reasoning_effort=reasoning_effort,
+                response_field_aliases=response_field_aliases,
             )
             processed_text = extract_output_text_from_responses(
                 raw_responses=raw_responses,

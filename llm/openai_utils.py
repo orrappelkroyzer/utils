@@ -21,24 +21,71 @@ from utils.llm.llm_utils import build_prompt_call_metadata, wrap_response_with_m
 logger = get_logger(__name__)
 config = load_config(add_date=False, config_path=Path(local_python_path)/ 'config.json')
 
-# GPT-5.6 model tiers
+# OpenAI model tiers
+GPT_6_ASTRA = "gpt-6-astra"
 GPT_5_6_SOL = "gpt-5.6-sol"
 GPT_5_6_TERRA = "gpt-5.6-terra"
 GPT_5_6_LUNA = "gpt-5.6-luna"
+NONE_REASONING_EFFORT = "none"
+LOW_REASONING_EFFORT = "low"
+MEDIUM_REASONING_EFFORT = "medium"
+HIGH_REASONING_EFFORT = "high"
+XHIGH_REASONING_EFFORT = "xhigh"
+MAX_REASONING_EFFORT = "max"
+REASONING_EFFORTS = (NONE_REASONING_EFFORT, LOW_REASONING_EFFORT, MEDIUM_REASONING_EFFORT, HIGH_REASONING_EFFORT, XHIGH_REASONING_EFFORT, MAX_REASONING_EFFORT)
+GPT_6_REASONING_EFFORTS = (LOW_REASONING_EFFORT, MEDIUM_REASONING_EFFORT, HIGH_REASONING_EFFORT, XHIGH_REASONING_EFFORT, MAX_REASONING_EFFORT)
 
 # Default model
-DEFAULT_MODEL = GPT_5_6_TERRA
+DEFAULT_MODEL = GPT_6_ASTRA
 
 # Define supported models and their capabilities
 SUPPORTED_MODELS = {
-    GPT_5_6_SOL: {"supports_temperature": False},
-    GPT_5_6_TERRA: {"supports_temperature": False},
-    GPT_5_6_LUNA: {"supports_temperature": False},
+    GPT_6_ASTRA: {
+        "supports_temperature": False,
+        "reasoning_efforts": GPT_6_REASONING_EFFORTS,
+        "default_reasoning_effort": "low",
+    },
+    GPT_5_6_SOL: {
+        "supports_temperature": False,
+        "reasoning_efforts": REASONING_EFFORTS,
+        "default_reasoning_effort": "none",
+    },
+    GPT_5_6_TERRA: {
+        "supports_temperature": False,
+        "reasoning_efforts": REASONING_EFFORTS,
+        "default_reasoning_effort": "none",
+    },
+    GPT_5_6_LUNA: {
+        "supports_temperature": False,
+        "reasoning_efforts": REASONING_EFFORTS,
+        "default_reasoning_effort": "none",
+    },
 }
 
 
 def model_supports_temperature(model: str) -> bool:
     return SUPPORTED_MODELS.get(model, {}).get("supports_temperature", False)
+
+
+def model_supports_reasoning(model: str) -> bool:
+    return bool(SUPPORTED_MODELS.get(model, {}).get("reasoning_efforts"))
+
+
+def validate_reasoning_effort(reasoning_effort, model=None):
+    model_settings = SUPPORTED_MODELS.get(model)
+    supported_efforts = model_settings.get("reasoning_efforts", REASONING_EFFORTS)
+    selected_effort = reasoning_effort
+    if selected_effort is None:
+        selected_effort = model_settings.get(
+            "default_reasoning_effort"
+        )
+    if selected_effort not in supported_efforts:
+        model_description = f" for model '{model}'" if model else ""
+        raise ValueError(
+            f"Unsupported reasoning effort '{selected_effort}'{model_description}. "
+            f"Expected one of: {', '.join(supported_efforts)}."
+        )
+    return selected_effort
 
 # Global client instance
 _client = None
@@ -87,6 +134,12 @@ def call_with_permission_retries(request_call, request_label: str):
 def fallback_models_for(model):
     """Return model fallback chain in priority order (includes original)."""
     chains = {
+        GPT_6_ASTRA: [
+            GPT_6_ASTRA,
+            GPT_5_6_SOL,
+            GPT_5_6_TERRA,
+            GPT_5_6_LUNA,
+        ],
         GPT_5_6_SOL: [GPT_5_6_SOL, GPT_5_6_TERRA, GPT_5_6_LUNA],
         GPT_5_6_TERRA: [GPT_5_6_TERRA, GPT_5_6_LUNA],
         GPT_5_6_LUNA: [GPT_5_6_LUNA],
@@ -101,7 +154,13 @@ def get_openai_client():
         _client = OpenAI(api_key=config['open_ai_key'])
     return _client
 
-def call_openai_api(messages, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
+def call_openai_api(
+    messages,
+    model=DEFAULT_MODEL,
+    temperature=0.1,
+    system_message=None,
+    reasoning_effort=None,
+):
     """
     Make an OpenAI API call with proper error handling and logging.
     
@@ -132,6 +191,11 @@ def call_openai_api(messages, model=DEFAULT_MODEL, temperature=0.1, system_messa
             "model": candidate_model,
             "messages": messages,
         }
+        if model_supports_reasoning(candidate_model):
+            api_params["reasoning_effort"] = validate_reasoning_effort(
+                reasoning_effort,
+                model=candidate_model,
+            )
         if model_supports_temperature(candidate_model):
             api_params["temperature"] = temperature
 
@@ -183,7 +247,13 @@ def call_openai_api(messages, model=DEFAULT_MODEL, temperature=0.1, system_messa
 
     return False, None, str(last_error) if last_error else "OpenAI API call failed"
 
-def call_openai_with_json_response(messages, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
+def call_openai_with_json_response(
+    messages,
+    model=DEFAULT_MODEL,
+    temperature=0.1,
+    system_message=None,
+    reasoning_effort=None,
+):
     """
     Make an OpenAI API call and parse JSON response.
     
@@ -199,10 +269,11 @@ def call_openai_with_json_response(messages, model=DEFAULT_MODEL, temperature=0.
     last_error = None
     for attempt in range(1, MAX_JSON_RESPONSE_ATTEMPTS + 1):
         success, response_content, error = call_openai_api(
-            messages,
-            model,
-            temperature,
-            system_message,
+            messages=messages,
+            model=model,
+            temperature=temperature,
+            system_message=system_message,
+            reasoning_effort=reasoning_effort,
         )
         if not success:
             return False, None, error
@@ -210,6 +281,7 @@ def call_openai_with_json_response(messages, model=DEFAULT_MODEL, temperature=0.
             response_content=response_content,
             model=model,
             temperature=temperature,
+            reasoning_effort=reasoning_effort,
         )
         if parsed_json is not None:
             return True, parsed_json, None
@@ -260,7 +332,12 @@ def parse_json_response_content(response_content):
     return None, last_error or "Unknown JSON parse error"
 
 
-def repair_json_response_with_model(response_content, model=DEFAULT_MODEL, temperature=0.1):
+def repair_json_response_with_model(
+    response_content,
+    model=DEFAULT_MODEL,
+    temperature=0.1,
+    reasoning_effort=None,
+):
     repair_prompt = (
         "Convert the following text into valid JSON.\n"
         "Return only valid JSON. Do not include markdown or explanations.\n\n"
@@ -271,6 +348,7 @@ def repair_json_response_with_model(response_content, model=DEFAULT_MODEL, tempe
         model=model,
         temperature=temperature,
         system_message=None,
+        reasoning_effort=reasoning_effort,
     )
     if not success:
         return None, error
@@ -281,7 +359,12 @@ def repair_json_response_with_model(response_content, model=DEFAULT_MODEL, tempe
     return repaired_json, None
 
 
-def parse_or_repair_json_response(response_content, model, temperature):
+def parse_or_repair_json_response(
+    response_content,
+    model,
+    temperature,
+    reasoning_effort=None,
+):
     """Parse JSON response content, then ask the model to repair it once."""
     parsed_json, parse_error = parse_json_response_content(response_content)
     if parsed_json is not None:
@@ -291,6 +374,7 @@ def parse_or_repair_json_response(response_content, model, temperature):
         response_content=response_content,
         model=model,
         temperature=temperature,
+        reasoning_effort=reasoning_effort,
     )
     if repaired_json is not None:
         return repaired_json, None
@@ -403,7 +487,14 @@ def upload_file_cached(file_path, cache_key=None, force_reload=False, purpose="u
     save_upload_cache(cache, cache_path)
     return file_id
 
-def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
+def call_openai_with_file(
+    file_id,
+    prompt,
+    model=DEFAULT_MODEL,
+    temperature=0.1,
+    system_message=None,
+    reasoning_effort=None,
+):
     """
     Call OpenAI API with a file reference (for PDFs, images, etc.).
 
@@ -428,6 +519,13 @@ def call_openai_with_file(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1,
 
     for candidate_model in fallback_chain:
         api_params = {"model": candidate_model, "input": messages, "max_output_tokens": 16384}
+        if model_supports_reasoning(candidate_model):
+            api_params["reasoning"] = {
+                "effort": validate_reasoning_effort(
+                    reasoning_effort,
+                    model=candidate_model,
+                )
+            }
         if model_supports_temperature(candidate_model):
             api_params["temperature"] = temperature
 
@@ -470,6 +568,7 @@ def call_openai_with_files(
     temperature=0.1,
     system_message=None,
     tools=None,
+    reasoning_effort=None,
 ):
     """
     Call OpenAI Responses API with multiple uploaded files.
@@ -488,6 +587,13 @@ def call_openai_with_files(
     messages.append({"role": "user", "content": user_content})
 
     api_params = {"model": model, "input": messages, "max_output_tokens": 16384}
+    if model_supports_reasoning(model):
+        api_params["reasoning"] = {
+            "effort": validate_reasoning_effort(
+                reasoning_effort,
+                model=model,
+            )
+        }
     if model_supports_temperature(model):
         api_params["temperature"] = temperature
     if tools:
@@ -519,9 +625,23 @@ def fix_invalid_json_escapes(s):
     import re
     return re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', s)
 
-def call_openai_with_file_json(file_id, prompt, model=DEFAULT_MODEL, temperature=0.1, system_message=None):
+def call_openai_with_file_json(
+    file_id,
+    prompt,
+    model=DEFAULT_MODEL,
+    temperature=0.1,
+    system_message=None,
+    reasoning_effort=None,
+):
     """Call OpenAI with a file and parse JSON from the response."""
-    success, content, error = call_openai_with_file(file_id, prompt, model, temperature, system_message)
+    success, content, error = call_openai_with_file(
+        file_id=file_id,
+        prompt=prompt,
+        model=model,
+        temperature=temperature,
+        system_message=system_message,
+        reasoning_effort=reasoning_effort,
+    )
     if not success:
         return False, None, error
     try:
@@ -546,6 +666,7 @@ def call_openai_with_files_json(
     temperature=0.1,
     system_message=None,
     tools=None,
+    reasoning_effort=None,
 ):
     """Call OpenAI with multiple files and retry malformed JSON responses."""
     last_error = None
@@ -557,6 +678,7 @@ def call_openai_with_files_json(
             temperature=temperature,
             system_message=system_message,
             tools=tools,
+            reasoning_effort=reasoning_effort,
         )
         if not success:
             return False, None, error
@@ -564,6 +686,7 @@ def call_openai_with_files_json(
             response_content=content,
             model=model,
             temperature=temperature,
+            reasoning_effort=reasoning_effort,
         )
         if parsed_json is not None:
             return True, parsed_json, None
@@ -621,6 +744,7 @@ def call_openai_skill_with_files_json(
     model: str = DEFAULT_MODEL,
     temperature: float = 0.1,
     response_schema: dict | None = None,
+    reasoning_effort=None,
 ):
     """
     Run one Responses API request over a skill plus input files.
@@ -636,6 +760,13 @@ def call_openai_skill_with_files_json(
         "input": [{"role": "user", "content": content}],
         "max_output_tokens": 16384,
     }
+    if model_supports_reasoning(model):
+        api_params["reasoning"] = {
+            "effort": validate_reasoning_effort(
+                reasoning_effort,
+                model=model,
+            )
+        }
     if model_supports_temperature(model):
         api_params["temperature"] = temperature
     if response_schema is not None:
@@ -686,6 +817,7 @@ def call_openai_with_json_prompt_file(
     include_response_metadata=False,
     prompt_version=None,
     metadata_key="llm_metadata",
+    reasoning_effort=None,
 ):
     """
     Load prompt text from file and call OpenAI for JSON output.
@@ -722,6 +854,7 @@ def call_openai_with_json_prompt_file(
             temperature=temperature,
             system_message=system_message,
             tools=tools,
+            reasoning_effort=reasoning_effort,
         )
     else:
         success, parsed_json, error = call_openai_with_json_response(
@@ -729,6 +862,7 @@ def call_openai_with_json_prompt_file(
             model=model,
             temperature=temperature,
             system_message=system_message,
+            reasoning_effort=reasoning_effort,
         )
 
     if not success:
@@ -803,6 +937,7 @@ def run_repair_prompt_call(
     system_message,
     prompt_version,
     metadata_key,
+    reasoning_effort,
 ):
     readable_missing_fields = get_readable_key_names(missing_fields)
     logger.warning(
@@ -831,6 +966,7 @@ def run_repair_prompt_call(
         include_response_metadata=True,
         prompt_version=prompt_version,
         metadata_key=metadata_key,
+        reasoning_effort=reasoning_effort,
     )
     if not success:
         return False, None, None, error
@@ -866,6 +1002,7 @@ def call_openai_with_json_prompt_file_with_repair(
     include_response_metadata=False,
     prompt_version=None,
     metadata_key="llm_metadata",
+    reasoning_effort=None,
 ):
     success, initial_payload, error = call_openai_with_json_prompt_file(
         prompt_file_path=prompt_file_path,
@@ -876,6 +1013,7 @@ def call_openai_with_json_prompt_file_with_repair(
         include_response_metadata=True,
         prompt_version=prompt_version,
         metadata_key=metadata_key,
+        reasoning_effort=reasoning_effort,
     )
     if not success:
         return False, None, error
@@ -914,6 +1052,7 @@ def call_openai_with_json_prompt_file_with_repair(
             system_message=system_message,
             prompt_version=prompt_version,
             metadata_key=metadata_key,
+            reasoning_effort=reasoning_effort,
         )
         if not success:
             return False, None, error

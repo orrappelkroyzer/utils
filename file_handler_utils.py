@@ -67,13 +67,23 @@ def read_csv(file_path, **kwargs):
         return pd.read_csv(file_path, **kwargs)
 
 
-def read_txt(file_path, encoding="utf-8"):
+def read_txt(file_path, encoding="utf-8", errors=None):
     file_path = Path(file_path)
     logger.info(f"Reading text from {file_path}")
     lock_path = Path(f"{file_path}.lock")
     with file_lock(lock_path=lock_path, timeout_seconds=600.0):
-        with file_path.open("r", encoding=encoding) as f:
+        with file_path.open("r", encoding=encoding, errors=errors) as f:
             return f.read()
+
+
+def write_txt(text, file_path, encoding="utf-8", errors=None):
+    file_path = Path(file_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Writing text to {file_path}")
+    lock_path = Path(f"{file_path}.lock")
+    with file_lock(lock_path=lock_path, timeout_seconds=600.0):
+        with file_path.open("w", encoding=encoding, errors=errors) as f:
+            f.write(text)
 
 
 def write_json(data, filename, output_dir=None, ensure_ascii=False, indent=2):

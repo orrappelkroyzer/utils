@@ -3,6 +3,10 @@ import random
 import time
 from pathlib import Path
 
+from selenium.common.exceptions import (
+    InvalidSessionIdException,
+    NoSuchWindowException,
+)
 from selenium.webdriver.common.by import By
 
 local_python_path = str(Path(__file__).parents[1])
@@ -16,6 +20,60 @@ CAPTCHA_WAIT_MESSAGE = (
     "This website uses a security service to protect against malicious bots. "
     "This page is displayed while the website verifies you are not a bot."
 )
+
+
+CHROME_UNAVAILABLE_MESSAGE_PARTS = (
+    "chrome not reachable",
+    "disconnected: not connected to devtools",
+    "failed to check if window was closed",
+    "invalid session id",
+    "session deleted because of page crash",
+    "tab crashed",
+    "target window already closed",
+    "unable to receive message from renderer",
+    "web view not found",
+)
+
+
+def exception_indicates_chrome_unavailable(error):
+    if isinstance(error, (InvalidSessionIdException, NoSuchWindowException)):
+        return True
+    error_text = f"{type(error).__name__}: {error}".lower()
+    return any(
+        message_part in error_text
+        for message_part in CHROME_UNAVAILABLE_MESSAGE_PARTS
+    )
+
+
+def is_chrome_unavailable_error(driver, error):
+    if exception_indicates_chrome_unavailable(error):
+        return True
+    try:
+        driver.current_window_handle
+    except Exception:
+        return True
+    return False
+
+
+def get_chrome_restart_block_reason(
+    restart_count,
+    scraped_since_restart,
+    max_restarts,
+):
+    if restart_count >= max_restarts:
+        return f"Chrome has already been restarted {max_restarts} times"
+    if restart_count > 0 and scraped_since_restart == 0:
+        return "nothing new was scraped since the previous Chrome restart"
+    return ""
+
+
+def quit_driver(driver):
+    if driver is None:
+        return
+    try:
+        driver.quit()
+    except Exception as error:
+        logger.warning(f"Could not close the browser cleanly: {error}")
 
 
 def extract_titles(driver):
