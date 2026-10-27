@@ -26,17 +26,20 @@ except FileNotFoundError:
 
 # OpenAI model tiers
 GPT_6_ASTRA = "gpt-6-astra"
-GPT_5_6_SOL = "gpt-5.6-sol"
-GPT_5_6_TERRA = "gpt-5.6-terra"
-GPT_5_6_LUNA = "gpt-5.6-luna"
-NONE_REASONING_EFFORT = "none"
+GPT_6_1_SOL = "gpt-6.1-sol"
+GPT_6_LUNA = "gpt-6-luna"
 LOW_REASONING_EFFORT = "low"
 MEDIUM_REASONING_EFFORT = "medium"
 HIGH_REASONING_EFFORT = "high"
 XHIGH_REASONING_EFFORT = "xhigh"
 MAX_REASONING_EFFORT = "max"
-REASONING_EFFORTS = (NONE_REASONING_EFFORT, LOW_REASONING_EFFORT, MEDIUM_REASONING_EFFORT, HIGH_REASONING_EFFORT, XHIGH_REASONING_EFFORT, MAX_REASONING_EFFORT)
-GPT_6_REASONING_EFFORTS = (LOW_REASONING_EFFORT, MEDIUM_REASONING_EFFORT, HIGH_REASONING_EFFORT, XHIGH_REASONING_EFFORT, MAX_REASONING_EFFORT)
+REASONING_EFFORTS = (
+    LOW_REASONING_EFFORT,
+    MEDIUM_REASONING_EFFORT,
+    HIGH_REASONING_EFFORT,
+    XHIGH_REASONING_EFFORT,
+    MAX_REASONING_EFFORT,
+)
 
 # Default model
 DEFAULT_MODEL = GPT_6_ASTRA
@@ -45,23 +48,18 @@ DEFAULT_MODEL = GPT_6_ASTRA
 SUPPORTED_MODELS = {
     GPT_6_ASTRA: {
         "supports_temperature": False,
-        "reasoning_efforts": GPT_6_REASONING_EFFORTS,
-        "default_reasoning_effort": "low",
+        "reasoning_efforts": REASONING_EFFORTS,
+        "default_reasoning_effort": LOW_REASONING_EFFORT,
     },
-    GPT_5_6_SOL: {
+    GPT_6_1_SOL: {
         "supports_temperature": False,
         "reasoning_efforts": REASONING_EFFORTS,
-        "default_reasoning_effort": "none",
+        "default_reasoning_effort": LOW_REASONING_EFFORT,
     },
-    GPT_5_6_TERRA: {
+    GPT_6_LUNA: {
         "supports_temperature": False,
         "reasoning_efforts": REASONING_EFFORTS,
-        "default_reasoning_effort": "none",
-    },
-    GPT_5_6_LUNA: {
-        "supports_temperature": False,
-        "reasoning_efforts": REASONING_EFFORTS,
-        "default_reasoning_effort": "none",
+        "default_reasoning_effort": LOW_REASONING_EFFORT,
     },
 }
 
@@ -75,7 +73,7 @@ def model_supports_reasoning(model: str) -> bool:
 
 
 def validate_reasoning_effort(reasoning_effort, model=None):
-    model_settings = SUPPORTED_MODELS.get(model)
+    model_settings = SUPPORTED_MODELS.get(model, {})
     supported_efforts = model_settings.get("reasoning_efforts", REASONING_EFFORTS)
     selected_effort = reasoning_effort
     if selected_effort is None:
@@ -147,13 +145,11 @@ def fallback_models_for(model):
     chains = {
         GPT_6_ASTRA: [
             GPT_6_ASTRA,
-            GPT_5_6_SOL,
-            GPT_5_6_TERRA,
-            GPT_5_6_LUNA,
+            GPT_6_1_SOL,
+            GPT_6_LUNA,
         ],
-        GPT_5_6_SOL: [GPT_5_6_SOL, GPT_5_6_TERRA, GPT_5_6_LUNA],
-        GPT_5_6_TERRA: [GPT_5_6_TERRA, GPT_5_6_LUNA],
-        GPT_5_6_LUNA: [GPT_5_6_LUNA],
+        GPT_6_1_SOL: [GPT_6_1_SOL, GPT_6_LUNA],
+        GPT_6_LUNA: [GPT_6_LUNA],
     }
     return chains.get(model, [model])
 
