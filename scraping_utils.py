@@ -20,6 +20,12 @@ CAPTCHA_WAIT_MESSAGE = (
     "This website uses a security service to protect against malicious bots. "
     "This page is displayed while the website verifies you are not a bot."
 )
+CLOUDFLARE_CHALLENGE_MESSAGE_PARTS = (
+    "attention required",
+    "performing security verification",
+    "verification successful. waiting for",
+    "verify you are human",
+)
 
 
 CHROME_UNAVAILABLE_MESSAGE_PARTS = (
@@ -90,12 +96,15 @@ def normalize_whitespace(text):
 
 
 def is_security_service_wait_message(text):
-    return normalize_whitespace(text) == CAPTCHA_WAIT_MESSAGE
+    return CAPTCHA_WAIT_MESSAGE in normalize_whitespace(text)
 
 
 def is_cloudflare_challenge(driver):
     page_text = driver.page_source.lower()
-    if "cloudflare" in page_text and ("verify you are human" in page_text or "attention required" in page_text):
+    if "cloudflare" in page_text and any(
+        message_part in page_text
+        for message_part in CLOUDFLARE_CHALLENGE_MESSAGE_PARTS
+    ):
         return True
     body_elements = driver.find_elements(By.TAG_NAME, "body")
     if body_elements:
