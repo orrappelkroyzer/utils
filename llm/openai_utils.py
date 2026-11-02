@@ -42,7 +42,7 @@ REASONING_EFFORTS = (
 )
 
 # Default model
-DEFAULT_MODEL = GPT_6_ASTRA
+DEFAULT_MODEL = GPT_6_1_SOL
 
 # Define supported models and their capabilities
 SUPPORTED_MODELS = {
